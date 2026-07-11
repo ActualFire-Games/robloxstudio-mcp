@@ -146,6 +146,11 @@ export class BridgeService {
   private instanceAliases: Map<string, InstanceAlias> = new Map();
   private instanceRegisteredListeners: Set<InstanceRegisteredListener> = new Set();
   private requestTimeout = 30000;
+  // Session pin: an instanceId the caller chose via set_active_session. It only
+  // breaks the multi-instance tie when instance_id is omitted (see resolveTarget
+  // Case 2); an explicit instance_id always wins. Auto-cleared when the pinned
+  // instance fully disconnects (see unregisterInstance).
+  private activeInstanceId: string | undefined;
 
   onInstanceRegistered(listener: InstanceRegisteredListener): () => void {
     this.instanceRegisteredListeners.add(listener);
@@ -334,6 +339,16 @@ export class BridgeService {
         req.reject(new Error(`Target (${req.targetInstanceId}, ${req.targetRole}) disconnected`));
       }
     }
+
+    // A session pin pointing at a fully disconnected instance (every role gone)
+    // would silently starve instance_id-omitted routing; drop it so the default
+    // multi-instance disambiguation resumes. matchingInstancesForInstanceId
+    // follows anon→place aliases and shared-placeId playtest peers, so the pin
+    // survives as long as ANY instance of the pinned session is still connected.
+    if (this.activeInstanceId !== undefined && this.matchingInstancesForInstanceId(this.activeInstanceId).length === 0) {
+      console.error(`Active Studio session "${this.activeInstanceId}" disconnected — clearing session pin`);
+      this.activeInstanceId = undefined;
+    }
   }
 
   unregisterInstanceId(instanceId: string): PublicPluginInstance[] {
@@ -355,6 +370,20 @@ export class BridgeService {
 
   getPublicInstances(): PublicPluginInstance[] {
     return this.getInstances().map(toPublic);
+  }
+
+  // Pins routing to a single instanceId so subsequent instance_id-omitted tool
+  // calls resolve to it instead of erroring when several places are connected.
+  setActiveSession(instanceId: string): void {
+    this.activeInstanceId = instanceId;
+  }
+
+  clearActiveSession(): void {
+    this.activeInstanceId = undefined;
+  }
+
+  getActiveSession(): string | undefined {
+    return this.activeInstanceId;
   }
 
   getInstanceBySessionId(pluginSessionId: string): PluginInstance | undefined {
@@ -533,6 +562,14 @@ export class BridgeService {
       };
     }
     if (distinctInstanceIds.size > 1) {
+      // Session pin breaks the tie: with instance_id omitted and several places
+      // connected, resolve to the pinned instance if it is still connected
+      // (following anon→place canonicalization via matchingInstancesForInstanceId).
+      // An explicit instance_id (Case 1) never reaches here, so it always wins
+      // over the pin. Delegates back through Case 1 for identical role resolution.
+      if (this.activeInstanceId !== undefined && this.matchingInstancesForInstanceId(this.activeInstanceId).length > 0) {
+        return this.resolveTarget({ instance_id: this.activeInstanceId, target });
+      }
       const errorCode: RoutingErrorCode = role ? 'ambiguous_target' : 'multiple_instances_connected';
       const msg = role
         ? `target=${role} is ambiguous because multiple Studio places are connected. Pass instance_id to choose a place.`

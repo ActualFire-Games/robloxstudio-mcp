@@ -1,5 +1,6 @@
 import { StudioHttpClient } from './studio-client.js';
 import { BridgeService, RoutingFailure, type PublicPluginInstance } from '../bridge-service.js';
+import { getClassInfoFromDump } from '../api-dump.js';
 import { runBuildExecutor } from './build-executor.js';
 import { OpenCloudClient } from '../opencloud-client.js';
 import { RobloxCookieClient } from '../roblox-cookie-client.js';
@@ -1408,15 +1409,33 @@ export class RobloxStudioTools {
     if (!className) {
       throw new Error('Class name is required for get_class_info');
     }
-    const response = await this._callSingle('/api/class-info', { className }, undefined, instance_id);
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(response)
-        }
-      ]
-    };
+    // The version-matched official API dump gives complete members with types,
+    // security tags, and inheritance — in-engine reflection cannot (plugins lack
+    // the RobloxScript capability for member enumeration). A definitive "unknown
+    // class" answer returns here; only an infrastructure failure (dump unavailable
+    // offline) falls through to the live-instance probe in the plugin.
+    try {
+      const info = await getClassInfoFromDump(className);
+      const payload = info ?? { error: `Unknown class: ${className}` };
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(payload)
+          }
+        ]
+      };
+    } catch {
+      const response = await this._callSingle('/api/class-info', { className }, undefined, instance_id);
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(response)
+          }
+        ]
+      };
+    }
   }
 
 
@@ -3694,6 +3713,137 @@ export class RobloxStudioTools {
         }
       ]
     };
+  }
+
+  // Groups connected instances into sessions keyed by the place-scoped
+  // instanceId ("place:<id>" or "anon:<uuid>"). Every role of a place (edit +
+  // playtest server/client-N) shares one instanceId, so a group is one Studio
+  // session. placeId is parsed from the "place:<id>" key when present, else
+  // taken from any instance metadata that reports a positive placeId.
+  private _groupStudioSessions(): {
+    instanceId: string;
+    placeId?: number;
+    placeName: string;
+    roles: string[];
+    instances: PublicPluginInstance[];
+  }[] {
+    const byInstanceId = new Map<string, PublicPluginInstance[]>();
+    for (const inst of this.bridge.getPublicInstances()) {
+      const group = byInstanceId.get(inst.instanceId) ?? [];
+      group.push(inst);
+      byInstanceId.set(inst.instanceId, group);
+    }
+    return Array.from(byInstanceId.entries()).map(([instanceId, group]) => {
+      const placeMatch = instanceId.match(/^place:(\d+)$/);
+      const placeId = placeMatch ? Number(placeMatch[1]) : group.find((i) => i.placeId > 0)?.placeId;
+      const placeName = group.find((i) => i.placeName !== '')?.placeName ?? '';
+      return { instanceId, placeId, placeName, roles: group.map((i) => i.role), instances: group };
+    });
+  }
+
+  // Sessions annotated with isActive per the current pin (resolving anon→place
+  // aliases so a pin set before publish still lights up the migrated session).
+  private _sessionsView() {
+    const pin = this.bridge.getActiveSession();
+    const resolvedPin = pin !== undefined ? this.bridge.resolveInstanceId(pin) : undefined;
+    return this._groupStudioSessions().map((session) => ({
+      ...session,
+      isActive: resolvedPin !== undefined && session.instanceId === resolvedPin,
+    }));
+  }
+
+  // Maps a caller-supplied instanceId (or "place:<placeId>") to the canonical
+  // instanceId of a currently-connected instance, following aliases and shared
+  // placeId equivalence. Returns undefined when nothing connected matches.
+  private _findConnectedInstanceId(candidate: string): string | undefined {
+    const equivalent = new Set(this.bridge.getEquivalentInstanceIds(candidate));
+    const match = this.bridge.getInstances().find((i) => equivalent.has(i.instanceId));
+    return match?.instanceId;
+  }
+
+  async listStudioSessions() {
+    const sessions = this._sessionsView();
+    const activeSession = sessions.find((s) => s.isActive)?.instanceId ?? null;
+    const note = sessions.length > 1 && activeSession === null
+      ? 'Multiple Studio sessions are connected and none is pinned: tool calls that omit instance_id will error with multiple_instances_connected. Use set_active_session to pin one.'
+      : undefined;
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({ sessions, count: sessions.length, activeSession, note })
+        }
+      ]
+    };
+  }
+
+  async setActiveSession(
+    instanceId?: string,
+    placeId?: number,
+    placeName?: string,
+    clear?: boolean,
+  ): Promise<{ content: { type: string; text: string }[]; isError?: boolean }> {
+    // Bridge-management tool: it selects a routing target rather than dispatching
+    // to Studio, so it surfaces failures as isError tool results (mirroring the
+    // RoutingFailure error/message shape) with the session list attached — rather
+    // than throwing RoutingFailure, whose data shape carries `instances`, not
+    // grouped `sessions`.
+    const respondError = (
+      code: string,
+      message: string,
+      sessions: ReturnType<RobloxStudioTools['_sessionsView']> = this._sessionsView(),
+    ) => ({
+      content: [{ type: 'text', text: JSON.stringify({ error: code, message, sessions }) }],
+      isError: true,
+    });
+    const respondSuccess = () => {
+      const pin = this.bridge.getActiveSession();
+      const activeSession = pin !== undefined ? this.bridge.resolveInstanceId(pin) : null;
+      return {
+        content: [{ type: 'text', text: JSON.stringify({ success: true, activeSession, sessions: this._sessionsView() }) }],
+      };
+    };
+
+    if (clear) {
+      this.bridge.clearActiveSession();
+      return respondSuccess();
+    }
+
+    if (instanceId !== undefined) {
+      const connectedId = this._findConnectedInstanceId(instanceId);
+      if (connectedId === undefined) {
+        return respondError('unrecognized_instance_id', `instance_id "${instanceId}" is not connected. Pass one from sessions.`);
+      }
+      this.bridge.setActiveSession(connectedId);
+      return respondSuccess();
+    }
+
+    if (placeId !== undefined) {
+      const connectedId = this._findConnectedInstanceId(`place:${placeId}`);
+      if (connectedId === undefined) {
+        return respondError('unrecognized_instance_id', `No connected session with placeId ${placeId}.`);
+      }
+      this.bridge.setActiveSession(connectedId);
+      return respondSuccess();
+    }
+
+    if (placeName !== undefined) {
+      const sessions = this._sessionsView();
+      const wanted = placeName.toLowerCase();
+      const exact = sessions.filter((s) => s.placeName !== '' && s.placeName.toLowerCase() === wanted);
+      const partial = sessions.filter((s) => s.placeName !== '' && s.placeName.toLowerCase().includes(wanted));
+      const matches = exact.length > 0 ? exact : partial;
+      if (matches.length === 0) {
+        return respondError('unrecognized_instance_id', `No connected session matching place name "${placeName}".`, sessions);
+      }
+      if (matches.length > 1) {
+        return respondError('ambiguous_target', `Place name "${placeName}" matches multiple sessions — pass placeId or instanceId instead.`, matches);
+      }
+      this.bridge.setActiveSession(matches[0].instanceId);
+      return respondSuccess();
+    }
+
+    return respondError('unrecognized_instance_id', 'Pass instanceId, placeId, or placeName to select a session — or clear: true to unpin.');
   }
 
   async undo(instance_id?: string) {

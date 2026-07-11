@@ -1,4 +1,5 @@
 import { BridgeService } from '../bridge-service.js';
+import { RobloxStudioTools } from '../tools/index.js';
 
 class MirroredBridgeService extends BridgeService {
   constructor(private readonly mirroredInstances: ReturnType<BridgeService['getInstances']>) {
@@ -419,6 +420,167 @@ describe('BridgeService', () => {
       if (r.ok) return;
       expect(r.error.code).toBe('unrecognized_instance_id');
       expect(r.error.data.count).toBe(0);
+    });
+  });
+
+  describe('session pin', () => {
+    test('pin resolves an instance_id-omitted call that would otherwise be ambiguous', () => {
+      register(bridge, { pluginSessionId: 'p1', instanceId: 'place:1', role: 'edit' });
+      register(bridge, { pluginSessionId: 'p2', instanceId: 'place:2', role: 'edit' });
+
+      // Without a pin this errors multiple_instances_connected.
+      expect(bridge.resolveTarget({}).ok).toBe(false);
+
+      bridge.setActiveSession('place:2');
+      const r = bridge.resolveTarget({});
+      expect(r.ok).toBe(true);
+      if (!r.ok || r.mode !== 'single') throw new Error('expected single');
+      expect(r.targetInstanceId).toBe('place:2');
+      expect(r.targetRole).toBe('edit');
+    });
+
+    test('pin also breaks ambiguity for a role-targeted call with no instance_id', () => {
+      register(bridge, { pluginSessionId: 'p1', instanceId: 'place:1', role: 'edit' });
+      register(bridge, { pluginSessionId: 'p2', instanceId: 'place:2', role: 'edit' });
+      register(bridge, { pluginSessionId: 'p3', instanceId: 'place:2', role: 'server' });
+
+      expect(bridge.resolveTarget({ target: 'server' }).ok).toBe(false);
+
+      bridge.setActiveSession('place:2');
+      const r = bridge.resolveTarget({ target: 'server' });
+      expect(r.ok).toBe(true);
+      if (!r.ok || r.mode !== 'single') throw new Error('expected single');
+      expect(r.targetInstanceId).toBe('place:2');
+      expect(r.targetRole).toBe('server');
+    });
+
+    test('explicit instance_id overrides the pin', () => {
+      register(bridge, { pluginSessionId: 'p1', instanceId: 'place:1', role: 'edit' });
+      register(bridge, { pluginSessionId: 'p2', instanceId: 'place:2', role: 'edit' });
+      bridge.setActiveSession('place:2');
+
+      const r = bridge.resolveTarget({ instance_id: 'place:1' });
+      expect(r.ok).toBe(true);
+      if (!r.ok || r.mode !== 'single') throw new Error('expected single');
+      expect(r.targetInstanceId).toBe('place:1');
+    });
+
+    test('single connected instance ignores an unrelated pin (behavior unchanged)', () => {
+      register(bridge, { pluginSessionId: 'p1', instanceId: 'place:1', role: 'edit' });
+      bridge.setActiveSession('place:does-not-exist');
+
+      const r = bridge.resolveTarget({});
+      expect(r.ok).toBe(true);
+      if (!r.ok || r.mode !== 'single') throw new Error('expected single');
+      expect(r.targetInstanceId).toBe('place:1');
+    });
+
+    test('pin auto-clears when its instance fully disconnects', () => {
+      register(bridge, { pluginSessionId: 'edit-2', instanceId: 'place:2', role: 'edit' });
+      register(bridge, { pluginSessionId: 'server-2', instanceId: 'place:2', role: 'server' });
+      register(bridge, { pluginSessionId: 'edit-1', instanceId: 'place:1', role: 'edit' });
+      bridge.setActiveSession('place:2');
+
+      // Removing one role of the pinned session keeps the pin (a peer remains).
+      bridge.unregisterInstance('server-2');
+      expect(bridge.getActiveSession()).toBe('place:2');
+
+      // Removing the last role of the pinned session clears the pin.
+      bridge.unregisterInstance('edit-2');
+      expect(bridge.getActiveSession()).toBeUndefined();
+
+      // Default multi-instance behavior is not otherwise disturbed.
+      register(bridge, { pluginSessionId: 'edit-3', instanceId: 'place:3', role: 'edit' });
+      expect(bridge.resolveTarget({}).ok).toBe(false);
+    });
+
+    test('disconnecting an unrelated instance does not clear the pin', () => {
+      register(bridge, { pluginSessionId: 'p1', instanceId: 'place:1', role: 'edit' });
+      register(bridge, { pluginSessionId: 'p2', instanceId: 'place:2', role: 'edit' });
+      bridge.setActiveSession('place:2');
+
+      bridge.unregisterInstance('p1');
+      expect(bridge.getActiveSession()).toBe('place:2');
+    });
+
+    test('pin follows anon→place canonicalization', () => {
+      register(bridge, { pluginSessionId: 'edit', instanceId: 'anon:old-file-id', role: 'edit' });
+      register(bridge, { pluginSessionId: 'other', instanceId: 'place:2', role: 'edit' });
+      // Pin the anon id, then publish the place so the id canonicalizes.
+      bridge.setActiveSession('anon:old-file-id');
+      register(bridge, { pluginSessionId: 'edit', instanceId: 'anon:old-file-id', role: 'edit', placeId: 12345 });
+
+      const r = bridge.resolveTarget({});
+      expect(r.ok).toBe(true);
+      if (!r.ok || r.mode !== 'single') throw new Error('expected single');
+      expect(r.targetInstanceId).toBe('place:12345');
+    });
+  });
+
+  describe('session tools', () => {
+    test('set_active_session maps placeId to place:<id> and pins the connected session', async () => {
+      register(bridge, { pluginSessionId: 'p1', instanceId: 'place:1', role: 'edit', placeId: 1, placeName: 'Alpha' });
+      register(bridge, { pluginSessionId: 'p2', instanceId: 'place:2', role: 'edit', placeId: 2, placeName: 'Beta' });
+      const tools = new RobloxStudioTools(bridge);
+
+      const result = await tools.setActiveSession(undefined, 2, undefined, undefined);
+      const body = JSON.parse(result.content[0].text);
+      expect(body.success).toBe(true);
+      expect(body.activeSession).toBe('place:2');
+      expect(bridge.getActiveSession()).toBe('place:2');
+
+      // The pin now breaks multi-instance ambiguity.
+      const r = bridge.resolveTarget({});
+      expect(r.ok).toBe(true);
+      if (!r.ok || r.mode !== 'single') throw new Error('expected single');
+      expect(r.targetInstanceId).toBe('place:2');
+    });
+
+    test('set_active_session rejects an unconnected placeId with an isError result', async () => {
+      register(bridge, { pluginSessionId: 'p1', instanceId: 'place:1', role: 'edit', placeId: 1 });
+      const tools = new RobloxStudioTools(bridge);
+
+      const result = await tools.setActiveSession(undefined, 999, undefined, undefined);
+      expect(result.isError).toBe(true);
+      const body = JSON.parse(result.content[0].text);
+      expect(body.error).toBe('unrecognized_instance_id');
+      expect(Array.isArray(body.sessions)).toBe(true);
+      expect(bridge.getActiveSession()).toBeUndefined();
+    });
+
+    test('set_active_session resolves place name case-insensitively and clear unpins', async () => {
+      register(bridge, { pluginSessionId: 'p1', instanceId: 'place:1', role: 'edit', placeId: 1, placeName: 'Alpha' });
+      register(bridge, { pluginSessionId: 'p2', instanceId: 'place:2', role: 'edit', placeId: 2, placeName: 'Beta' });
+      const tools = new RobloxStudioTools(bridge);
+
+      const pinned = JSON.parse((await tools.setActiveSession(undefined, undefined, 'beta', undefined)).content[0].text);
+      expect(pinned.success).toBe(true);
+      expect(bridge.getActiveSession()).toBe('place:2');
+
+      const cleared = JSON.parse((await tools.setActiveSession(undefined, undefined, undefined, true)).content[0].text);
+      expect(cleared.success).toBe(true);
+      expect(cleared.activeSession).toBeNull();
+      expect(bridge.getActiveSession()).toBeUndefined();
+    });
+
+    test('list_studio_sessions groups by place and flags the active session', async () => {
+      register(bridge, { pluginSessionId: 'p1', instanceId: 'place:1', role: 'edit', placeId: 1, placeName: 'Alpha' });
+      register(bridge, { pluginSessionId: 'p1s', instanceId: 'place:1', role: 'server', placeId: 1, placeName: 'Alpha' });
+      register(bridge, { pluginSessionId: 'p2', instanceId: 'place:2', role: 'edit', placeId: 2, placeName: 'Beta' });
+      const tools = new RobloxStudioTools(bridge);
+      bridge.setActiveSession('place:1');
+
+      const body = JSON.parse((await tools.listStudioSessions()).content[0].text);
+      expect(body.count).toBe(2);
+      expect(body.activeSession).toBe('place:1');
+      const alpha = body.sessions.find((s: { instanceId: string }) => s.instanceId === 'place:1');
+      expect(alpha.placeId).toBe(1);
+      expect(alpha.placeName).toBe('Alpha');
+      expect(alpha.roles.sort()).toEqual(['edit', 'server']);
+      expect(alpha.isActive).toBe(true);
+      expect(body.sessions.find((s: { instanceId: string }) => s.instanceId === 'place:2').isActive).toBe(false);
+      // No note once a session is pinned.
+      expect(body.note).toBeUndefined();
     });
   });
 

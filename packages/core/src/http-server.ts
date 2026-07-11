@@ -190,6 +190,8 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
   }, body.instance_id),
   breakpoints: (tools, body) => tools.breakpoints(body.action, body, body.target, body.instance_id),
   get_connected_instances: (tools) => tools.getConnectedInstances(),
+  list_studio_sessions: (tools) => tools.listStudioSessions(),
+  set_active_session: (tools, body) => tools.setActiveSession(body.instanceId, body.placeId, body.placeName, body.clear),
   export_build: (tools, body) => tools.exportBuild(body.instancePath, body.outputId, body.style, body.instance_id),
   create_build: (tools, body) => tools.createBuild(body.id, body.style, body.palette, body.parts, body.bounds),
   generate_build: (tools, body) => tools.generateBuild(body.id, body.style, body.palette, body.code, body.seed),

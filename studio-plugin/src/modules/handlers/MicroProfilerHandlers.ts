@@ -148,6 +148,20 @@ const FOCUS_GROUP_MASKS: Record<string, string[]> = {
 
 let cachedLibMP: LibMPLike | undefined;
 
+// The first capture after LibMP's profiler is enabled carries a one-time ~350ms
+// engine stall ~12 frames into the capture (reproduced repeatedly). The stall frame
+// carries a single log entry and reports IsPaused=false, so the data-quality
+// heuristics never catch it. Absorbing this many extra frames before the real capture
+// window opens pushes the stall frame out of the rolling buffer so it never skews stats.
+const WARMUP_FRAMES = 24;
+let captureWarmedUp = false;
+
+// A capture holds the runtime peer's thread across its capture window AND the whole
+// aggregation walk (which now yields cooperatively). Two overlapping captures would
+// corrupt the shared warmup flag / LibMP session state and double the freeze, so
+// re-entrant calls are rejected instead.
+let captureInProgress = false;
+
 function normalizeDurationMs(value: unknown): number {
 	if (!typeIs(value, "number")) return DEFAULT_DURATION_MS;
 	return math.clamp(math.floor(value), MIN_DURATION_MS, MAX_DURATION_MS);
@@ -402,7 +416,13 @@ function collectFrameSummary(session: LibMPSession, startFrame: number, frameMax
 		const isIncomplete = desc.IsIncomplete();
 		const isPaused = desc.IsPaused();
 		if (isIncomplete) incompleteFrames += 1;
-		if (isPaused) pausedFrames += 1;
+		if (isPaused) {
+			// Paused frames span the idle gap since the previous capture session; their
+			// multi-second spans would wreck avg/p50/p95/max and dominate top_frames.
+			// Count them for reporting, then skip them out of the statistics entirely.
+			pausedFrames += 1;
+			continue;
+		}
 		if (durationRaw <= 0 || durationRaw > 1000000000000) continue;
 		const durationUs = rawToUs(durationRaw);
 		durations.push(durationUs);
@@ -440,7 +460,7 @@ function collectFrameSummary(session: LibMPSession, startFrame: number, frameMax
 	};
 }
 
-function captureMicroProfiler(requestData: Record<string, unknown>): unknown {
+function runMicroProfilerCapture(requestData: Record<string, unknown>): unknown {
 	if (!RunService.IsRunning()) {
 		return {
 			error: "runtime_target_required",
@@ -498,6 +518,19 @@ function captureMicroProfiler(requestData: Record<string, unknown>): unknown {
 			message: tostring(captureStartResult),
 			backend,
 		};
+	}
+
+	// First-capture warmup: the first capture after the profiler is enabled carries a
+	// one-time ~350ms engine stall ~12 frames in (IsPaused=false, so heuristics miss it).
+	// Absorb extra Heartbeat frames before the real capture window opens so the stall
+	// frame is evicted from the rolling buffer and never lands in the analyzed window.
+	let warmupFramesAbsorbed = 0;
+	if (!captureWarmedUp) {
+		for (let i = 0; i < WARMUP_FRAMES; i++) {
+			RunService.Heartbeat.Wait();
+		}
+		captureWarmedUp = true;
+		warmupFramesAbsorbed = WARMUP_FRAMES;
 	}
 
 	task.wait(durationMs / 1000);
@@ -658,8 +691,23 @@ function captureMicroProfiler(requestData: Record<string, unknown>): unknown {
 	let lastProcessedFrameId: number | undefined;
 	let lastProcessedTimestampRaw: number | undefined;
 
+	// Cooperative time budget: this single synchronous pass can walk up to max_events
+	// (default 250k, up to 1,000,000) scope records, which runs solid for multiple
+	// seconds and freezes the runtime peer's thread — the client shows "Gameplay
+	// Paused". Yield to the engine whenever the budget is spent so the current frame can
+	// finish. Yielding mid-iteration is safe: the session was opened from a static
+	// snapshot buffer (OpenFromBuffer) that nothing mutates while we read it. The clock
+	// is sampled only every 512 steps — an os.clock() per record would itself dominate
+	// the loop, and 512 records is well under one frame of work.
+	const budgetMs = includeGpu || focus === "all" ? 12 : 6;
+	let deadlineClock = os.clock() + budgetMs / 1000;
+
 	while (eventsSampled < maxEvents && iterator.Step()) {
 		eventsSampled += 1;
+		if (eventsSampled % 512 === 0 && os.clock() > deadlineClock) {
+			RunService.Heartbeat.Wait();
+			deadlineClock = os.clock() + budgetMs / 1000;
+		}
 		const state = iterator.GetState();
 		if (!state) continue;
 		const frameId = state.FrameId();
@@ -1236,6 +1284,7 @@ function captureMicroProfiler(requestData: Record<string, unknown>): unknown {
 		data_quality: {
 			event_limit_hit: eventsSampled >= maxEvents,
 			iterator_finished: iteratorFinished,
+			warmup_frames_absorbed: warmupFramesAbsorbed,
 			unmatched_exits: unmatchedExits,
 			dropped_spans: droppedSpans,
 			open_stack_entries_at_end: openStackEntriesAtEnd,
@@ -1257,6 +1306,32 @@ function captureMicroProfiler(requestData: Record<string, unknown>): unknown {
 
 	iterator.Dispose();
 	session.Dispose();
+	return result;
+}
+
+// Concurrency guard. The worker yields (warmup frames, the capture window, and the
+// cooperative budget yields during aggregation), so a second overlapping capture could
+// interleave and corrupt the shared warmup flag / LibMP session state. The flag is set
+// on entry and always cleared on BOTH pcall result paths so a thrown error cannot wedge
+// it on. The validation guards inside the worker do not yield before the flag is
+// cleared, so no concurrent caller can observe the flag during a cheap early return.
+function captureMicroProfiler(requestData: Record<string, unknown>): unknown {
+	if (captureInProgress) {
+		return {
+			error: "micro_profiler_capture_in_progress",
+			message: "A MicroProfiler capture is already in progress; retry once it completes.",
+		};
+	}
+
+	captureInProgress = true;
+	const [ok, result] = pcall(() => runMicroProfilerCapture(requestData));
+	captureInProgress = false;
+	if (!ok) {
+		return {
+			error: "micro_profiler_capture_failed",
+			message: tostring(result),
+		};
+	}
 	return result;
 }
 

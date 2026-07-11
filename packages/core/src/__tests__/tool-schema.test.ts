@@ -138,6 +138,8 @@ describe('Tool schema compatibility', () => {
     'create_build',
     'generate_build',
     'get_connected_instances',
+    'list_studio_sessions',
+    'set_active_session',
     'manage_instance',
     'get_roblox_docs',
     'get_roblox_skills',

@@ -10,16 +10,11 @@ const SOURCE_TRUNCATE_CHAR_BUDGET = 25000;
 const SOURCE_TRUNCATE_LINE_BUDGET = 400;
 const SOURCE_TRUNCATE_TO_LINES = 300;
 
-function normalizeEscapes(s: string): string {
-	let result = s;
-	result = result.gsub("\\\\", "\x01")[0];
-	result = result.gsub("\\n", "\n")[0];
-	result = result.gsub("\\t", "\t")[0];
-	result = result.gsub("\\r", "\r")[0];
-	result = result.gsub('\\"', '"')[0];
-	result = result.gsub("\x01", "\\")[0];
-	return result;
-}
+// NOTE: Script text arrives here already fully decoded. The request body is transported as JSON and
+// HttpService.JSONDecode (Communication.ts) resolves every JSON string escape exactly once. Any further
+// escape processing here would DOUBLE-decode the content and corrupt literal backslash sequences the
+// model legitimately wants to keep in the Lua source (e.g. `"\n"`, `"\t"`, Windows paths like `"C:\\Users"`).
+// Therefore the handlers below write requestData.source / old_string / new_string / newContent verbatim.
 
 function getTopServiceName(instance: Instance): string {
 	let topServiceInst: Instance = instance;
@@ -114,7 +109,9 @@ function setScriptSource(requestData: Record<string, unknown>) {
 	const instancePath = requestData.instancePath as string;
 	const newSource = requestData.source as string;
 
-	if (!instancePath || !newSource) return { error: "Instance path and source are required" };
+	// An empty string is a valid source (clearing a script), so check for a missing/non-string value
+	// rather than a truthiness test (which would reject "").
+	if (!instancePath || !typeIs(newSource, "string")) return { error: "Instance path and source are required" };
 
 	const instance = getInstanceByPath(instancePath);
 	if (!instance) return { error: `Instance not found: ${instancePath}` };
@@ -122,7 +119,7 @@ function setScriptSource(requestData: Record<string, unknown>) {
 		return { error: `Instance is not a script-like object: ${instance.ClassName}` };
 	}
 
-	const sourceToSet = normalizeEscapes(newSource);
+	const sourceToSet = newSource;
 	const recordingId = beginRecording(`Set script source: ${instance.Name}`);
 
 	const [updateSuccess, updateResult] = pcall(() => {
@@ -201,16 +198,13 @@ function setScriptSource(requestData: Record<string, unknown>) {
 
 function editScriptLines(requestData: Record<string, unknown>) {
 	const instancePath = requestData.instancePath as string;
-	let oldString = requestData.old_string as string;
-	let newString = requestData.new_string as string;
+	const oldString = requestData.old_string as string;
+	const newString = requestData.new_string as string;
 	const startLine = requestData.startLine as number | undefined;
 
 	if (!instancePath || oldString === undefined || newString === undefined) {
 		return { error: "Instance path, old_string, and new_string are required" };
 	}
-
-	oldString = normalizeEscapes(oldString);
-	newString = normalizeEscapes(newString);
 
 	const instance = getInstanceByPath(instancePath);
 	if (!instance) return { error: `Instance not found: ${instancePath}` };
@@ -284,11 +278,10 @@ function editScriptLines(requestData: Record<string, unknown>) {
 function insertScriptLines(requestData: Record<string, unknown>) {
 	const instancePath = requestData.instancePath as string;
 	const afterLine = (requestData.afterLine as number) ?? 0;
-	let newContent = requestData.newContent as string;
+	const newContent = requestData.newContent as string;
 
-	if (!instancePath || !newContent) return { error: "Instance path and newContent are required" };
-
-	newContent = normalizeEscapes(newContent);
+	// An empty string is valid content (e.g. inserting a blank line), so check type rather than truthiness.
+	if (!instancePath || !typeIs(newContent, "string")) return { error: "Instance path and newContent are required" };
 
 	const instance = getInstanceByPath(instancePath);
 	if (!instance) return { error: `Instance not found: ${instancePath}` };

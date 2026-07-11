@@ -1,4 +1,5 @@
 const ScriptEditorService = game.GetService("ScriptEditorService");
+const HttpService = game.GetService("HttpService");
 
 const LUAU_KEYWORDS = new Set<string>([
 	"and", "break", "continue", "do", "else", "elseif", "end", "export",
@@ -230,6 +231,20 @@ function readScriptSource(instance: LuaSourceContainer): string {
 	return (instance as unknown as { Source: string }).Source;
 }
 
+// Some MCP clients stringify values sent to schema fields that declare no type, so a structured value
+// (a Vector3 array, a tagged { _type: ... } object, ...) can arrive as a JSON string. Decode such a string
+// back into a Lua table so the normal marshalling can handle it. Returns undefined when the string is not a
+// JSON object/array (so a genuine string is never touched).
+function maybeDecodeJsonTable(value: string): unknown {
+	const trimmed = value.gsub("^%s*(.-)%s*$", "%1")[0];
+	const first = trimmed.sub(1, 1);
+	if (first !== "{" && first !== "[") return undefined;
+
+	const [ok, decoded] = pcall(() => HttpService.JSONDecode(trimmed));
+	if (ok && typeIs(decoded, "table")) return decoded;
+	return undefined;
+}
+
 function convertPropertyValue(instance: Instance, propertyName: string, propertyValue: unknown): unknown {
 	if (propertyValue === undefined) return undefined;
 
@@ -339,6 +354,15 @@ function convertPropertyValue(instance: Instance, propertyName: string, property
 	}
 
 	if (typeIs(propertyValue, "string")) {
+		// If the value arrived as a JSON string (client stringified an array/object for the untyped
+		// propertyValue field), decode it and re-run the conversion — but adopt the result only if it
+		// became a real datatype, so a genuine string that merely looks like JSON is left untouched.
+		const decoded = maybeDecodeJsonTable(propertyValue);
+		if (decoded !== undefined) {
+			const reconverted = convertPropertyValue(instance, propertyName, decoded);
+			if (!typeIs(reconverted, "table")) return reconverted;
+		}
+
 		const [success, currentVal] = pcall(() => inst[propertyName]);
 		if (success && typeOf(currentVal) === "EnumItem") {
 			const enumItem = currentVal as EnumItem;
@@ -435,6 +459,81 @@ function evaluateFormula(
 	}
 }
 
+// Convert a Roblox value into a JSON-encodable form for responses. Rich datatypes become tagged tables
+// (round-trippable by deserializeValue); primitives pass through; anything else is stringified so the
+// response can never fail to JSON-encode (an un-encodable value silently aborts the whole response).
+function serializeValue(value: unknown): unknown {
+	const vType = typeOf(value);
+	if (vType === "Vector3") {
+		const v = value as Vector3;
+		return { X: v.X, Y: v.Y, Z: v.Z, _type: "Vector3" };
+	} else if (vType === "Vector2") {
+		const v = value as Vector2;
+		return { X: v.X, Y: v.Y, _type: "Vector2" };
+	} else if (vType === "Color3") {
+		const v = value as Color3;
+		return { R: v.R, G: v.G, B: v.B, _type: "Color3" };
+	} else if (vType === "CFrame") {
+		const v = value as CFrame;
+		const [cx, cy, cz, r00, r01, r02, r10, r11, r12, r20, r21, r22] = v.GetComponents();
+		return {
+			Position: { X: v.Position.X, Y: v.Position.Y, Z: v.Position.Z },
+			components: [cx, cy, cz, r00, r01, r02, r10, r11, r12, r20, r21, r22],
+			_type: "CFrame",
+		};
+	} else if (vType === "UDim2") {
+		const v = value as UDim2;
+		return {
+			X: { Scale: v.X.Scale, Offset: v.X.Offset },
+			Y: { Scale: v.Y.Scale, Offset: v.Y.Offset },
+			_type: "UDim2",
+		};
+	} else if (vType === "UDim") {
+		const v = value as UDim;
+		return { Scale: v.Scale, Offset: v.Offset, _type: "UDim" };
+	} else if (vType === "BrickColor") {
+		const v = value as BrickColor;
+		return { Name: v.Name, _type: "BrickColor" };
+	} else if (vType === "string" || vType === "number" || vType === "boolean" || vType === "nil") {
+		return value;
+	}
+	// EnumItem, Instance, NumberSequence, ColorSequence, NumberRange, Rect, Font, etc. are not JSON-encodable.
+	return tostring(value);
+}
+
+// Assign a single property, applying the same value marshalling the single/multi property tools use:
+// instance references for Parent/PrimaryPart, tostring for Name/Source, and convertPropertyValue
+// (arrays/objects -> Vector/Color/UDim, enum strings, "true"/"false" -> boolean) for everything else.
+// Throws (so the surrounding pcall fails) when a Parent/PrimaryPart reference cannot be resolved, instead
+// of silently reporting success.
+function applyProperty(instance: Instance, propertyName: string, propertyValue: unknown): void {
+	const inst = instance as unknown as Record<string, unknown>;
+
+	if (propertyName === "Parent" || propertyName === "PrimaryPart") {
+		if (typeIs(propertyValue, "string")) {
+			const refInstance = getInstanceByPath(propertyValue);
+			if (!refInstance) error(`${propertyName} reference not found: ${propertyValue}`);
+			inst[propertyName] = refInstance;
+		} else {
+			inst[propertyName] = propertyValue;
+		}
+		return;
+	}
+
+	if (propertyName === "Name") {
+		instance.Name = tostring(propertyValue);
+		return;
+	}
+
+	if (propertyName === "Source" && instance.IsA("LuaSourceContainer")) {
+		(instance as unknown as { Source: string }).Source = tostring(propertyValue);
+		return;
+	}
+
+	const converted = convertPropertyValue(instance, propertyName, propertyValue);
+	inst[propertyName] = converted !== undefined ? converted : propertyValue;
+}
+
 function compareVersions(v1: string, v2: string): number {
 	function parseVersion(v: string): number[] {
 		const parts: number[] = [];
@@ -464,6 +563,9 @@ export = {
 	joinLines,
 	readScriptSource,
 	convertPropertyValue,
+	serializeValue,
+	applyProperty,
+	maybeDecodeJsonTable,
 	evaluateFormula,
 	compareVersions,
 };

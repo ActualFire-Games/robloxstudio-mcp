@@ -183,7 +183,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'get_class_info',
     category: 'read',
-    description: 'Get properties/methods for a class',
+    description: 'Get the full API of a Roblox class from the official version-matched API dump: properties, methods, events, and callbacks with types, exact signatures, security tags (PluginSecurity etc.), Yields/Deprecated/ReadOnly tags, superclass chain, and direct subclasses. Members inherited from ancestors are labeled with inheritedFrom. Falls back to live-instance probing if the dump is unavailable offline.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1659,6 +1659,41 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     inputSchema: {
       type: 'object',
       properties: {}
+    }
+  },
+  {
+    name: 'list_studio_sessions',
+    category: 'read',
+    description: 'List the Studio sessions (open places) connected to this MCP server, each with its place name/ID and connected instances (edit, playtest server/client-N). Shows which session is pinned as the routing target. When multiple sessions are connected and none is pinned, tool calls that omit instance_id error with multiple_instances_connected — call set_active_session to pin one.',
+    inputSchema: {
+      type: 'object',
+      properties: {}
+    }
+  },
+  {
+    name: 'set_active_session',
+    category: 'write',
+    description: 'Pin which connected Studio session (place) subsequent tools operate on when several Studio windows are connected and you omit instance_id. Pinning by placeId or placeName scopes the whole session including its playtest server/client instances. An explicit instance_id on a tool call always overrides the pin. Pass clear: true to unpin and return to default routing. The pin auto-clears when the pinned session fully disconnects.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        instanceId: {
+          type: 'string',
+          description: 'Specific instance ID to pin (e.g. the same place opened in two windows). From list_studio_sessions.'
+        },
+        placeId: {
+          type: 'number',
+          description: 'Place ID of the session to pin (from list_studio_sessions)'
+        },
+        placeName: {
+          type: 'string',
+          description: 'Place name to pin (case-insensitive; must match exactly one connected session)'
+        },
+        clear: {
+          type: 'boolean',
+          description: 'Unpin and return to default routing'
+        }
+      }
     }
   },
 

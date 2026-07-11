@@ -1,7 +1,7 @@
 import Utils from "../Utils";
 import Recording from "../Recording";
 
-const { getInstanceByPath, convertPropertyValue } = Utils;
+const { getInstanceByPath, applyProperty, serializeValue } = Utils;
 const { beginRecording, finishRecording } = Recording;
 
 function setProperty(requestData: Record<string, unknown>) {
@@ -17,31 +17,8 @@ function setProperty(requestData: Record<string, unknown>) {
 	if (!instance) return { error: `Instance not found: ${instancePath}` };
 	const recordingId = beginRecording(`Set ${propertyName} property`);
 
-	const inst = instance as unknown as Record<string, unknown>;
-
 	const [success, result] = pcall(() => {
-		if (propertyName === "Parent" || propertyName === "PrimaryPart") {
-			if (typeIs(propertyValue, "string")) {
-				const refInstance = getInstanceByPath(propertyValue);
-				if (refInstance) {
-					inst[propertyName] = refInstance;
-				} else {
-					return { error: `${propertyName} instance not found: ${propertyValue}` };
-				}
-			}
-		} else if (propertyName === "Name") {
-			instance.Name = tostring(propertyValue);
-		} else if (propertyName === "Source" && instance.IsA("LuaSourceContainer")) {
-			(instance as unknown as { Source: string }).Source = tostring(propertyValue);
-		} else {
-			const convertedValue = convertPropertyValue(instance, propertyName, propertyValue);
-			if (convertedValue !== undefined) {
-				inst[propertyName] = convertedValue;
-			} else {
-				inst[propertyName] = propertyValue;
-			}
-		}
-
+		applyProperty(instance, propertyName, propertyValue);
 		return true;
 	});
 
@@ -78,9 +55,7 @@ function massSetProperty(requestData: Record<string, unknown>) {
 		const instance = getInstanceByPath(path);
 		if (instance) {
 			const [success, err] = pcall(() => {
-				const converted = convertPropertyValue(instance, propertyName, propertyValue);
-				(instance as unknown as Record<string, unknown>)[propertyName] =
-					converted !== undefined ? converted : propertyValue;
+				applyProperty(instance, propertyName, propertyValue);
 			});
 			if (success) {
 				successCount++;
@@ -118,7 +93,7 @@ function massGetProperty(requestData: Record<string, unknown>) {
 		if (instance) {
 			const [success, value] = pcall(() => (instance as unknown as Record<string, unknown>)[propertyName]);
 			if (success) {
-				results.push({ path, success: true, propertyName, propertyValue: value });
+				results.push({ path, success: true, propertyName, propertyValue: serializeValue(value) });
 			} else {
 				results.push({ path, success: false, error: tostring(value) });
 			}
@@ -142,27 +117,13 @@ function setProperties(requestData: Record<string, unknown>) {
 	if (!instance) return { error: `Instance not found: ${instancePath}` };
 
 	const recordingId = beginRecording("Set multiple properties");
-	const inst = instance as unknown as Record<string, unknown>;
 	const results: Record<string, unknown>[] = [];
 	let successCount = 0;
 	let failureCount = 0;
 
 	for (const [propName, propValue] of pairs(properties)) {
 		const [success, err] = pcall(() => {
-			if (propName === "Parent" || propName === "PrimaryPart") {
-				if (typeIs(propValue, "string")) {
-					const refInstance = getInstanceByPath(propValue as string);
-					if (!refInstance) error(`${propName} reference not found: ${propValue}`);
-					inst[propName as string] = refInstance;
-				}
-			} else if (propName === "Name") {
-				instance.Name = tostring(propValue);
-			} else if (propName === "Source" && instance.IsA("LuaSourceContainer")) {
-				(instance as unknown as { Source: string }).Source = tostring(propValue);
-			} else {
-				const converted = convertPropertyValue(instance, propName as string, propValue);
-				inst[propName as string] = converted !== undefined ? converted : propValue;
-			}
+			applyProperty(instance, propName as string, propValue);
 		});
 
 		if (success) {

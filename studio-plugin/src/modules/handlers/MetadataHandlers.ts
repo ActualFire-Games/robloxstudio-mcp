@@ -6,48 +6,85 @@ import LuauExec from "../LuauExec";
 const ChangeHistoryService = game.GetService("ChangeHistoryService");
 const Selection = game.GetService("Selection");
 
-const { getInstancePath, getInstanceByPath } = Utils;
+const { getInstancePath, getInstanceByPath, serializeValue, maybeDecodeJsonTable } = Utils;
 const { beginRecording, finishRecording } = Recording;
 
-function serializeValue(value: unknown): unknown {
-	const vType = typeOf(value);
-	if (vType === "Vector3") {
-		const v = value as Vector3;
-		return { X: v.X, Y: v.Y, Z: v.Z, _type: "Vector3" };
-	} else if (vType === "Color3") {
-		const v = value as Color3;
-		return { R: v.R, G: v.G, B: v.B, _type: "Color3" };
-	} else if (vType === "CFrame") {
-		const v = value as CFrame;
-		return { Position: { X: v.Position.X, Y: v.Position.Y, Z: v.Position.Z }, _type: "CFrame" };
-	} else if (vType === "UDim2") {
-		const v = value as UDim2;
-		return {
-			X: { Scale: v.X.Scale, Offset: v.X.Offset },
-			Y: { Scale: v.Y.Scale, Offset: v.Y.Offset },
-			_type: "UDim2",
-		};
-	} else if (vType === "BrickColor") {
-		const v = value as BrickColor;
-		return { Name: v.Name, _type: "BrickColor" };
-	}
-	return value;
-}
+const STRUCTURED_ATTR_TYPES = new Set([
+	"Vector2", "Vector3", "Color3", "CFrame", "UDim", "UDim2", "BrickColor",
+]);
 
 function deserializeValue(attributeValue: unknown, valueType?: string): unknown {
-	if (!typeIs(attributeValue, "table")) return attributeValue;
+	// A structured value may arrive as a JSON string when the client stringifies it for the untyped
+	// attributeValue field. Decode it back to a table when a structured type is indicated — either via a
+	// structured valueType hint or an embedded _type tag (as returned by get_attribute) — so the tagged
+	// branches below can rebuild it. A plain string with neither signal is left untouched.
+	if (typeIs(attributeValue, "string")) {
+		const decoded = maybeDecodeJsonTable(attributeValue);
+		if (decoded !== undefined) {
+			// Only adopt the decoded table when it names a real datatype — via a known _type tag (as
+			// get_attribute returns) or a structured valueType hint. A JSON string that merely happens to
+			// carry some other _type is left as a plain string rather than failing SetAttribute.
+			const typeTag = (decoded as Record<string, unknown>)._type;
+			const hasKnownTypeTag = typeIs(typeTag, "string") && STRUCTURED_ATTR_TYPES.has(typeTag);
+			if (hasKnownTypeTag || (valueType !== undefined && STRUCTURED_ATTR_TYPES.has(valueType))) {
+				attributeValue = decoded;
+			}
+		}
+	}
+
+	// Honor an explicit primitive type hint, coercing common stringified forms so booleans/numbers are
+	// stored as real booleans/numbers whether the client sends a native JSON value or a string. This
+	// mirrors the property path (convertPropertyValue), which the attribute path previously did not.
+	if (valueType === "boolean") {
+		if (typeIs(attributeValue, "boolean")) return attributeValue;
+		return attributeValue === "true" || attributeValue === 1;
+	}
+	if (valueType === "number") {
+		if (typeIs(attributeValue, "number")) return attributeValue;
+		const n = tonumber(attributeValue);
+		return n !== undefined ? n : attributeValue;
+	}
+	if (valueType === "string") {
+		return typeIs(attributeValue, "string") ? attributeValue : tostring(attributeValue);
+	}
+
+	if (!typeIs(attributeValue, "table")) {
+		// No structural/hinted type: coerce stringified booleans to real booleans (matches set_property).
+		// Pass valueType:"string" to store a literal "true"/"false" string instead.
+		if (attributeValue === "true") return true;
+		if (attributeValue === "false") return false;
+		return attributeValue;
+	}
 
 	const tbl = attributeValue as Record<string, unknown>;
 	const t = (tbl._type as string) ?? valueType;
 
 	if (t === "Vector3") {
-		return new Vector3((tbl.X as number) ?? 0, (tbl.Y as number) ?? 0, (tbl.Z as number) ?? 0);
+		const a = tbl as unknown as number[];
+		return new Vector3((tbl.X as number) ?? a[0] ?? 0, (tbl.Y as number) ?? a[1] ?? 0, (tbl.Z as number) ?? a[2] ?? 0);
+	} else if (t === "Vector2") {
+		const a = tbl as unknown as number[];
+		return new Vector2((tbl.X as number) ?? a[0] ?? 0, (tbl.Y as number) ?? a[1] ?? 0);
 	} else if (t === "Color3") {
-		return new Color3((tbl.R as number) ?? 0, (tbl.G as number) ?? 0, (tbl.B as number) ?? 0);
+		const a = tbl as unknown as number[];
+		return new Color3((tbl.R as number) ?? a[0] ?? 0, (tbl.G as number) ?? a[1] ?? 0, (tbl.B as number) ?? a[2] ?? 0);
+	} else if (t === "CFrame") {
+		const comps = tbl.components as number[] | undefined;
+		if (comps !== undefined && comps.size() >= 12) {
+			return new CFrame(
+				comps[0], comps[1], comps[2], comps[3], comps[4], comps[5],
+				comps[6], comps[7], comps[8], comps[9], comps[10], comps[11],
+			);
+		}
+		const pos = tbl.Position as Record<string, number> | undefined;
+		if (pos !== undefined) return new CFrame(pos.X ?? 0, pos.Y ?? 0, pos.Z ?? 0);
+		return attributeValue;
 	} else if (t === "UDim2") {
 		const x = tbl.X as Record<string, number> | undefined;
 		const y = tbl.Y as Record<string, number> | undefined;
 		return new UDim2(x?.Scale ?? 0, x?.Offset ?? 0, y?.Scale ?? 0, y?.Offset ?? 0);
+	} else if (t === "UDim") {
+		return new UDim((tbl.Scale as number) ?? 0, (tbl.Offset as number) ?? 0);
 	} else if (t === "BrickColor") {
 		return new BrickColor(((tbl.Name as string) ?? "Medium stone grey") as unknown as number);
 	}
