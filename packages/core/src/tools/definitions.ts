@@ -575,7 +575,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'set_script_source',
     category: 'write',
-    description: 'Replace entire script source. For partial edits use edit/insert/delete_script_lines.',
+    description: 'Replace entire script source. For partial edits use edit/insert/delete_script_lines. If the target script is inside a Roblox Package, the response includes a packageWarning — surface it to the user (unmarked package changes can be reverted by package auto-update).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -598,7 +598,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'edit_script_lines',
     category: 'write',
-    description: 'Replace exact text in a script. Without line_range, old_string must match exactly once in the script. Pass line_range as a single line (e.g. "42") to anchor the edit when old_string is ambiguous.',
+    description: 'Replace exact text in a script. Without line_range, old_string must match exactly once in the script. Pass line_range as a single line (e.g. "42") to anchor the edit when old_string is ambiguous. If the target script is inside a Roblox Package, the response includes a packageWarning — surface it to the user (unmarked package changes can be reverted by package auto-update).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -629,7 +629,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'insert_script_lines',
     category: 'write',
-    description: 'Insert lines after a given line number (0 = beginning).',
+    description: 'Insert lines after a given line number (0 = beginning). If the target script is inside a Roblox Package, the response includes a packageWarning — surface it to the user (unmarked package changes can be reverted by package auto-update).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -656,7 +656,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'delete_script_lines',
     category: 'write',
-    description: 'Delete a range of lines. line_range is 1-indexed and inclusive.',
+    description: 'Delete a range of lines. line_range is 1-indexed and inclusive. If the target script is inside a Roblox Package, the response includes a packageWarning — surface it to the user (unmarked package changes can be reverted by package auto-update).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2604,7 +2604,7 @@ part(0,2,0,2,1,1,"b")`,
   {
     name: 'find_and_replace_in_scripts',
     category: 'write',
-    description: 'Find and replace text across all scripts in the game. Supports literal and Lua pattern matching. Use dryRun to preview changes before applying. Pairs with grep_scripts for search-only operations.',
+    description: 'Find and replace text across all scripts in the game. Supports literal and Lua pattern matching. Use dryRun to preview changes before applying. Pairs with grep_scripts for search-only operations. If any edited script is inside a Roblox Package, the response includes packageWarnings — surface them to the user (unmarked package changes can be reverted by package auto-update).',
     inputSchema: {
       type: 'object',
       properties: {

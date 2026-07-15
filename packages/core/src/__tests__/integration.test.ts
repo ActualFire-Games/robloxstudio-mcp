@@ -175,4 +175,43 @@ describe('Integration', () => {
       expect(await reqB).toEqual({ ok: 'B' });
     });
   });
+
+  describe('Package warning passthrough', () => {
+    // The plugin attaches packageWarning/packageRootPath to a successful script-edit response when the
+    // edited script lives inside a Roblox Package. The server passes plugin responses through generically
+    // (JSON.stringify(response)), so those fields must survive verbatim to the MCP tool result JSON.
+    test('set_script_source surfaces the plugin packageWarning in the tool result', async () => {
+      await request(app).post('/ready').send(READY()).expect(200);
+      app.setMCPServerActive(true);
+
+      const toolPromise = tools.setScriptSource('game.ServerScriptService.Packaged.Main', 'print("hi")');
+
+      const poll = await request(app).get('/poll?pluginSessionId=session-1').expect(200);
+      expect(poll.body.request.endpoint).toBe('/api/set-script-source');
+
+      const packageWarning =
+        "Edited script is inside package 'game.ServerScriptService.Packaged'. Studio may not mark the " +
+        'package as modified for programmatic edits; unmarked packages can be silently reverted by package ' +
+        'auto-update or "Get Latest". Verify the package shows the modified badge (a one-character manual ' +
+        'edit-and-undo in the script editor forces it), or publish the package.';
+      const pluginResponse = {
+        success: true,
+        instancePath: 'game.ServerScriptService.Packaged.Main',
+        method: 'UpdateSourceAsync',
+        message: 'Script source updated successfully (editor-safe)',
+        packageWarning,
+        packageRootPath: 'game.ServerScriptService.Packaged',
+      };
+
+      await request(app)
+        .post('/response')
+        .send({ requestId: poll.body.requestId, response: pluginResponse })
+        .expect(200);
+
+      const result = await toolPromise;
+      const body = JSON.parse(result.content[0].text);
+      expect(body.packageWarning).toBe(packageWarning);
+      expect(body.packageRootPath).toBe('game.ServerScriptService.Packaged');
+    });
+  });
 });

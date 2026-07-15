@@ -24,6 +24,57 @@ function getTopServiceName(instance: Instance): string {
 	return topServiceInst.Name;
 }
 
+// Walk up the ancestry to the enclosing package root — the first ancestor (or the instance itself)
+// holding a PackageLink child. Studio does not reliably mark a Package as modified when a script inside
+// it is edited programmatically (via ScriptEditorService / Source writes) rather than by a manual editor
+// keystroke, and an unmarked package can be silently reverted by package auto-update / "Get Latest",
+// losing the edit. Returns undefined when the script is not inside a package.
+function findPackageRoot(instance: Instance): Instance | undefined {
+	let current: Instance | undefined = instance;
+	while (current !== undefined) {
+		if (current.FindFirstChildOfClass("PackageLink") !== undefined) {
+			return current;
+		}
+		current = current.Parent;
+	}
+	return undefined;
+}
+
+interface PackageWarningFields {
+	packageWarning: string;
+	packageRootPath: string;
+}
+
+// Build the advisory packageWarning/packageRootPath response fields for a script inside a package, or
+// undefined when it is not. The warning is advisory only: it does not itself fix Studio's package-modified
+// badge — the user must verify the badge (or publish the package) so the edit is not reverted.
+function packageWarningFor(instance: Instance): PackageWarningFields | undefined {
+	const packageRoot = findPackageRoot(instance);
+	if (packageRoot === undefined) {
+		return undefined;
+	}
+	const rootPath = packageRoot.GetFullName();
+	return {
+		packageWarning: `Edited script is inside package '${rootPath}'. Studio may not mark the package as modified for programmatic edits; unmarked packages can be silently reverted by package auto-update or "Get Latest". Verify the package shows the modified badge (a one-character manual edit-and-undo in the script editor forces it), or publish the package.`,
+		packageRootPath: rootPath,
+	};
+}
+
+// Attach package-warning fields to a successful-edit response in place. `result` is the handler's
+// success object (typed unknown coming out of pcall); it is guarded to a table before mutation, and a
+// no-op when the edited script is not inside a package.
+function applyPackageWarning(result: unknown, packageFields: PackageWarningFields | undefined): void {
+	if (packageFields === undefined) {
+		return;
+	}
+	if (!typeIs(result, "table")) {
+		return;
+	}
+	const record = result as Record<string, unknown>;
+	record.packageWarning = packageFields.packageWarning;
+	record.packageRootPath = packageFields.packageRootPath;
+}
+
 function sliceLines(lines: string[], startLine: number, endLine: number): string[] {
 	const selectedLines: string[] = [];
 	for (let i = startLine; i <= endLine; i++) {
@@ -119,6 +170,9 @@ function setScriptSource(requestData: Record<string, unknown>) {
 		return { error: `Instance is not a script-like object: ${instance.ClassName}` };
 	}
 
+	// Resolve package membership before mutating — the replace fallback below destroys `instance`, and
+	// the replacement is re-parented under the same (still package-owned) ancestor, so the root is the same.
+	const packageFields = packageWarningFor(instance);
 	const sourceToSet = newSource;
 	const recordingId = beginRecording(`Set script source: ${instance.Name}`);
 
@@ -140,6 +194,7 @@ function setScriptSource(requestData: Record<string, unknown>) {
 
 	if (updateSuccess) {
 		finishRecording(recordingId, true);
+		applyPackageWarning(updateResult, packageFields);
 		return updateResult;
 	}
 
@@ -157,6 +212,7 @@ function setScriptSource(requestData: Record<string, unknown>) {
 
 	if (directSuccess) {
 		finishRecording(recordingId, true);
+		applyPackageWarning(directResult, packageFields);
 		return directResult;
 	}
 
@@ -187,6 +243,7 @@ function setScriptSource(requestData: Record<string, unknown>) {
 
 	if (replaceSuccess) {
 		finishRecording(recordingId, true);
+		applyPackageWarning(replaceResult, packageFields);
 		return replaceResult;
 	}
 
@@ -212,6 +269,7 @@ function editScriptLines(requestData: Record<string, unknown>) {
 		return { error: `Instance is not a script-like object: ${instance.ClassName}` };
 	}
 
+	const packageFields = packageWarningFor(instance);
 	const recordingId = beginRecording(`Edit script: ${instance.Name}`);
 
 	const [success, result] = pcall(() => {
@@ -269,6 +327,7 @@ function editScriptLines(requestData: Record<string, unknown>) {
 
 	if (success) {
 		finishRecording(recordingId, true);
+		applyPackageWarning(result, packageFields);
 		return result;
 	}
 	finishRecording(recordingId, false);
@@ -289,6 +348,7 @@ function insertScriptLines(requestData: Record<string, unknown>) {
 		return { error: `Instance is not a script-like object: ${instance.ClassName}` };
 	}
 
+	const packageFields = packageWarningFor(instance);
 	const recordingId = beginRecording(`Insert script lines after line ${afterLine}: ${instance.Name}`);
 
 	const [success, result] = pcall(() => {
@@ -318,6 +378,7 @@ function insertScriptLines(requestData: Record<string, unknown>) {
 
 	if (success) {
 		finishRecording(recordingId, true);
+		applyPackageWarning(result, packageFields);
 		return result;
 	}
 	finishRecording(recordingId, false);
@@ -339,6 +400,7 @@ function deleteScriptLines(requestData: Record<string, unknown>) {
 		return { error: `Instance is not a script-like object: ${instance.ClassName}` };
 	}
 
+	const packageFields = packageWarningFor(instance);
 	const recordingId = beginRecording(`Delete script lines ${startLine}-${endLine}: ${instance.Name}`);
 
 	const [success, result] = pcall(() => {
@@ -366,6 +428,7 @@ function deleteScriptLines(requestData: Record<string, unknown>) {
 
 	if (success) {
 		finishRecording(recordingId, true);
+		applyPackageWarning(result, packageFields);
 		return result;
 	}
 	finishRecording(recordingId, false);
@@ -431,6 +494,8 @@ function findAndReplaceInScripts(requestData: Record<string, unknown>) {
 	}
 
 	const changes: ScriptChange[] = [];
+	// Deduped by package root full-name so multiple edited scripts in one package produce a single warning.
+	const packageWarningsByRoot = new Map<string, string>();
 	let totalReplacements = 0;
 	let scriptsSearched = 0;
 	let hitLimit = false;
@@ -477,6 +542,11 @@ function findAndReplaceInScripts(requestData: Record<string, unknown>) {
 					if (!ok) {
 						(instance as unknown as { Source: string }).Source = newSource;
 					}
+
+					const packageFields = packageWarningFor(instance);
+					if (packageFields !== undefined) {
+						packageWarningsByRoot.set(packageFields.packageRootPath, packageFields.packageWarning);
+					}
 				}
 
 				changes.push({
@@ -500,7 +570,12 @@ function findAndReplaceInScripts(requestData: Record<string, unknown>) {
 		finishRecording(recordingId, changes.size() > 0);
 	}
 
-	return {
+	const packageWarnings: PackageWarningFields[] = [];
+	for (const [rootPath, warning] of packageWarningsByRoot) {
+		packageWarnings.push({ packageRootPath: rootPath, packageWarning: warning });
+	}
+
+	const response: Record<string, unknown> = {
 		success: true,
 		dryRun,
 		pattern: searchPattern,
@@ -511,6 +586,10 @@ function findAndReplaceInScripts(requestData: Record<string, unknown>) {
 		changes,
 		truncated: hitLimit,
 	};
+	if (packageWarnings.size() > 0) {
+		response.packageWarnings = packageWarnings;
+	}
+	return response;
 }
 
 export = {
