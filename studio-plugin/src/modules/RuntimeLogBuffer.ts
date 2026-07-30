@@ -24,6 +24,7 @@ interface RuntimeLogEntry {
 	ts: number; // wall-clock seconds via DateTime, coherent across peers
 	level: LogLevel;
 	message: string;
+	data?: Record<string, unknown>;
 }
 
 const MAX_BYTES = 64 * 1024;
@@ -46,6 +47,37 @@ function nowSec(): number {
 	return DateTime.now().UnixTimestampMillis / 1000;
 }
 
+// Studio occasionally exposes binary-bearing Output messages through
+// LogService (for example, plugin hydration diagnostics containing raw CSG
+// data). HttpService:JSONEncode rejects those strings outright. Preserve all
+// valid UTF-8 verbatim and make only malformed bytes JSON-safe and visible.
+function escapeInvalidUtf8(msg: string): string {
+	const [valid] = utf8.len(msg);
+	// Roblox currently returns nil (not the false declared by @rbxts/types)
+	// when it encounters a malformed sequence. A numeric result is the only
+	// portable success discriminator across both representations.
+	if (typeIs(valid, "number")) return msg;
+
+	const parts: string[] = [];
+	let cursor = 1;
+	while (cursor <= msg.size()) {
+		const [suffixValid, invalidPosition] = utf8.len(msg, cursor);
+		if (typeIs(suffixValid, "number")) {
+			parts.push(string.sub(msg, cursor));
+			break;
+		}
+		if (!typeIs(invalidPosition, "number")) break;
+
+		if (invalidPosition > cursor) {
+			parts.push(string.sub(msg, cursor, invalidPosition - 1));
+		}
+		const [invalidByte] = string.byte(msg, invalidPosition);
+		parts.push(string.format("\\x%02X", invalidByte));
+		cursor = invalidPosition + 1;
+	}
+	return parts.join("");
+}
+
 function dropOldestUntilFits(incomingBytes: number): void {
 	while (
 		entries.size() > 0 &&
@@ -57,14 +89,21 @@ function dropOldestUntilFits(incomingBytes: number): void {
 	}
 }
 
-function pushEntry(msg: string, t: Enum.MessageType, ts = nowSec()): void {
-	const bytes = msg.size();
+function pushEntry(
+	msg: string,
+	t: Enum.MessageType,
+	ts = nowSec(),
+	data?: Record<string, unknown>,
+): void {
+	const safeMessage = escapeInvalidUtf8(msg);
+	const bytes = safeMessage.size();
 	dropOldestUntilFits(bytes);
 	entries.push({
 		seq: nextSeq,
 		ts,
 		level: levelTag(t),
-		message: msg,
+		message: safeMessage,
+		data,
 	});
 	nextSeq += 1;
 	totalBytes += bytes;
@@ -77,14 +116,21 @@ interface LogHistoryEntry {
 }
 
 function seedRuntimeHistory(): void {
-	if (!RunService.IsRunning()) return;
-
 	const [ok, history] = pcall(() => LogService.GetLogHistory() as LogHistoryEntry[]);
 	if (!ok) return;
+	const isEdit = !RunService.IsRunning();
+	// GetLogHistory timestamps and DateTime.now() share Unix time, while
+	// os.clock() is elapsed time for this Studio process. Their difference is
+	// therefore the process launch boundary. Edit-mode history is filtered to
+	// that boundary so startup errors from this launch are recovered without
+	// importing history left by an earlier Studio process.
+	const processStartedAt = nowSec() - os.clock();
 
 	for (const entry of history) {
 		if (!typeIs(entry.message, "string")) continue;
-		pushEntry(entry.message, entry.messageType, typeIs(entry.timestamp, "number") ? entry.timestamp : undefined);
+		const timestamp = typeIs(entry.timestamp, "number") ? entry.timestamp : undefined;
+		if (isEdit && (timestamp === undefined || timestamp < processStartedAt - 1)) continue;
+		pushEntry(entry.message, entry.messageType, timestamp);
 	}
 }
 
@@ -92,12 +138,12 @@ function install(): void {
 	if (installed) return;
 	if (!RunService.IsStudio()) return;
 	installed = true;
-	// Play peers can emit startup logs before the plugin finishes loading.
-	// Seed from per-DataModel LogHistory so get_runtime_logs can still see
-	// those early messages; skip edit mode to avoid stale prior-session logs.
+	// Every peer can emit startup logs before the plugin finishes loading.
+	// Seed from per-DataModel LogHistory so get_runtime_logs can still see them;
+	// edit history is bounded to the current Studio process above.
 	seedRuntimeHistory();
-	LogService.MessageOut.Connect((msg, t) => {
-		pushEntry(msg, t);
+	LogService.MessageOut.Connect((msg, t, context?: Record<string, unknown>) => {
+		pushEntry(msg, t, undefined, context);
 	});
 }
 

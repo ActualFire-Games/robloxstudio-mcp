@@ -1,6 +1,6 @@
 {
   "name": "@chrrxs/robloxstudio-mcp-monorepo",
-  "version": "2.22.0",
+  "version": "2.23.0",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -20,8 +20,11 @@
     "start:inspector": "node packages/robloxstudio-mcp-inspector/dist/index.js",
     "lint": "eslint packages/*/src/**/*.ts",
     "typecheck": "tsc --noEmit -p packages/core/tsconfig.json",
-    "test": "npm test -w packages/core",
+    "test": "npm test -w packages/core && npm run test:asset-security",
+    "test:asset-security": "jest --config jest.asset-security.config.js --runInBand",
+    "test:codex-wrapper": "node tests/codex-wsl-environment.mjs",
     "test:e2e:auto-install": "node tests/auto-install-plugin-e2e.mjs",
+    "test:e2e:lifecycle": "node tests/studio-lifecycle-regressions.mjs",
     "test:studio:tools": "node tests/studio-tooling-smoke.mjs",
     "test:watch": "npm run test:watch -w packages/core",
     "test:coverage": "npm run test:coverage -w packages/core",

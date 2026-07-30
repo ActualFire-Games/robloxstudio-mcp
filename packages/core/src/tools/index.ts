@@ -2,9 +2,18 @@ import { StudioHttpClient } from './studio-client.js';
 import { BridgeService, RoutingFailure, type PublicPluginInstance } from '../bridge-service.js';
 import { getClassInfoFromDump } from '../api-dump.js';
 import { runBuildExecutor } from './build-executor.js';
-import { OpenCloudClient } from '../opencloud-client.js';
+import {
+  OpenCloudClient,
+  type AssetSearchParams,
+  type CreatorStoreSearchCategory,
+} from '../opencloud-client.js';
 import { RobloxCookieClient } from '../roblox-cookie-client.js';
-import { StudioInstanceManager, type ManagedStudioInstance, type StudioLaunchSource } from '../studio-instance-manager.js';
+import {
+  parseStudioProcessEnvironmentPatch,
+  StudioInstanceManager,
+  type ManagedStudioInstance,
+  type StudioLaunchSource,
+} from '../studio-instance-manager.js';
 import { decodeImagePathToRgba, decodePngToRgba } from '../image-decode.js';
 import { DOC_CATEGORIES, getRobloxDoc, isDocCategory } from '../roblox-docs.js';
 import { findBuiltInStudioSkill, loadBuiltInStudioSkills } from '../studio-skills.js';
@@ -27,7 +36,8 @@ type RawImageCaptureResponse = {
 
 type ToolContent =
   | { type: 'text'; text: string }
-  | { type: 'image'; data: string; mimeType: string };
+  | { type: 'image'; data: string; mimeType: string }
+  | { type: 'audio'; data: string; mimeType: string };
 
 type EncodedViewportCapture = {
   success: true;
@@ -62,9 +72,38 @@ type GenerateModelImage =
   { kind: 'asset'; asset_id: number };
 
 const MAX_INLINE_IMAGE_BYTES = 6_000_000;
+const DEFAULT_ASSET_AUDIO_PREVIEWS = 3;
+const MAX_ASSET_AUDIO_PREVIEWS = 5;
+const MAX_INLINE_AUDIO_PREVIEW_BYTES = 3_000_000;
+const MAX_INLINE_AUDIO_PREVIEW_TOTAL_BYTES = 6_000_000;
+const DEFAULT_ASSET_PREVIEW_DEPTH = 4;
+const MAX_ASSET_PREVIEW_HIERARCHY_NODES = 100;
+const MAX_SEARCH_ASSET_DESCRIPTION_LENGTH = 240;
+const ROBLOX_CREATOR_USER_ID = 1;
 const MAX_DEVICE_MATRIX_ENTRIES = 6;
 const MAX_NETWORK_PACKET_LOSS_PERCENT = 0.5;
 const STUDIO_ASSISTANT_SOURCE_IMAGE_LABEL = 'Studio Assistant Source Image';
+const CREATOR_STORE_SEARCH_TYPES = new Set<string>([
+  'Audio',
+  'Model',
+  'Decal',
+  'Plugin',
+  'MeshPart',
+  'Video',
+  'FontFamily',
+  'Image',
+  'Particle',
+  'VFX',
+]);
+const CREATOR_STORE_SORT_CATEGORIES = new Set<string>([
+  'Relevance',
+  'Trending',
+  'Top',
+  'AudioDuration',
+  'CreateTime',
+  'UpdatedTime',
+  'Ratings',
+]);
 const MULTIPLAYER_FORCE_REQUIRED_MESSAGE =
   'StudioTestService multiplayer stop is currently disabled because StudioTestService:EndTest is broken for this flow. ' +
   'Pass force=true only if you understand you must manually close the multiplayer test windows afterward.';
@@ -81,6 +120,54 @@ function multiplayerStopDisabledBody(): Record<string, unknown> {
     manualCleanupRequired: true,
     recoveryHint: 'Close the Roblox Studio multiplayer test windows manually.',
   };
+}
+
+function normalizeCreatorStoreSearch(
+  assetType: string,
+  query?: string,
+): {
+  requestedAssetType: string;
+  searchCategoryType: CreatorStoreSearchCategory;
+  effectiveQuery?: string;
+} {
+  if (!CREATOR_STORE_SEARCH_TYPES.has(assetType)) {
+    throw new Error(
+      `search_assets assetType must be one of: ${Array.from(CREATOR_STORE_SEARCH_TYPES).join(', ')}`,
+    );
+  }
+
+  const trimmedQuery = query?.trim() || undefined;
+  if (assetType === 'Image') {
+    return {
+      requestedAssetType: assetType,
+      searchCategoryType: 'Decal',
+      effectiveQuery: trimmedQuery,
+    };
+  }
+
+  if (assetType === 'Particle' || assetType === 'VFX') {
+    const suffix = assetType === 'Particle' ? 'particle effect' : 'VFX';
+    const alreadyEffectSpecific = trimmedQuery !== undefined && /\b(?:particle|vfx|effect)\b/i.test(trimmedQuery);
+    return {
+      requestedAssetType: assetType,
+      searchCategoryType: 'Model',
+      effectiveQuery: trimmedQuery
+        ? alreadyEffectSpecific ? trimmedQuery : `${trimmedQuery} ${suffix}`
+        : suffix,
+    };
+  }
+
+  return {
+    requestedAssetType: assetType,
+    searchCategoryType: assetType as CreatorStoreSearchCategory,
+    effectiveQuery: trimmedQuery,
+  };
+}
+
+function normalizeSearchAssetDescription(description: string | undefined): string {
+  const normalized = description?.replace(/\s+/g, ' ').trim() ?? '';
+  if (normalized.length <= MAX_SEARCH_ASSET_DESCRIPTION_LENGTH) return normalized;
+  return `${normalized.slice(0, MAX_SEARCH_ASSET_DESCRIPTION_LENGTH - 1).trimEnd()}…`;
 }
 
 // Encodes the raw RGBA capture into the requested image format.
@@ -131,9 +218,114 @@ function numberField(row: Record<string, unknown> | undefined, key: string): num
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
+function optionalNumberField(
+  row: Record<string, unknown> | undefined,
+  key: string,
+): number | undefined {
+  const value = row?.[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
 function stringField(row: Record<string, unknown> | undefined, key: string): string {
   const value = row?.[key];
   return typeof value === 'string' && value !== '' ? value : '';
+}
+
+function robloxAssetIdFromContentId(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) {
+    return value;
+  }
+  if (typeof value !== 'string') return undefined;
+
+  const trimmed = value.trim();
+  const direct = /^(?:rbxassetid:\/\/)?(\d+)$/.exec(trimmed);
+  const query = /[?&]id=(\d+)(?:&|$)/i.exec(trimmed);
+  const rawId = direct?.[1] ?? query?.[1];
+  if (!rawId) return undefined;
+
+  const parsed = Number(rawId);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function compactPreviewHierarchy(value: unknown): {
+  hierarchy: Record<string, unknown>[];
+  truncated: boolean;
+} {
+  let remaining = MAX_ASSET_PREVIEW_HIERARCHY_NODES;
+  let truncated = false;
+
+  const compactNode = (row: Record<string, unknown>): Record<string, unknown> | undefined => {
+    if (remaining <= 0) {
+      truncated = true;
+      return undefined;
+    }
+    remaining--;
+
+    const node: Record<string, unknown> = {
+      name: stringField(row, 'name'),
+      className: stringField(row, 'className'),
+    };
+    const properties = asRecord(row.properties);
+    if (properties && Object.keys(properties).length > 0) {
+      node.properties = properties;
+    }
+
+    const children = asRows(row.children);
+    if (children.length > 0) {
+      const compactedChildren: Record<string, unknown>[] = [];
+      for (const child of children) {
+        const compacted = compactNode(child);
+        if (!compacted) break;
+        compactedChildren.push(compacted);
+      }
+      if (compactedChildren.length > 0) {
+        node.children = compactedChildren;
+      }
+      if (compactedChildren.length < children.length) {
+        node.childCount = children.length;
+        node.truncated = true;
+        truncated = true;
+      }
+    } else if (row.truncated === true) {
+      node.truncated = true;
+      const childCount = numberField(row, 'childCount');
+      if (childCount > 0) node.childCount = childCount;
+    }
+    return node;
+  };
+
+  const hierarchy: Record<string, unknown>[] = [];
+  for (const root of asRows(value)) {
+    const compacted = compactNode(root);
+    if (!compacted) break;
+    hierarchy.push(compacted);
+  }
+  return { hierarchy, truncated };
+}
+
+function compactSoundReference(sound: Record<string, unknown>): Record<string, unknown> {
+  const compact: Record<string, unknown> = {
+    name: stringField(sound, 'name'),
+    className: stringField(sound, 'className'),
+  };
+  const path = stringField(sound, 'path');
+  if (path) compact.path = path;
+  const assetId = robloxAssetIdFromContentId(
+    sound.assetId ?? sound.soundId ?? sound.asset,
+  );
+  if (assetId !== undefined) compact.assetId = assetId;
+
+  const volume = optionalNumberField(sound, 'volume');
+  if (volume !== undefined && volume !== 1) compact.volume = volume;
+  const playbackSpeed = optionalNumberField(sound, 'playbackSpeed');
+  if (playbackSpeed !== undefined && playbackSpeed !== 1) {
+    compact.playbackSpeed = playbackSpeed;
+  }
+  const timeLength = optionalNumberField(sound, 'timeLength');
+  if (timeLength !== undefined && timeLength > 0) compact.duration = timeLength;
+  if (sound.looped === true) compact.looped = true;
+  if (sound.autoPlay === true) compact.autoPlay = true;
+  return compact;
 }
 
 function microProfilerDurationMs(body: Record<string, unknown> | undefined): number {
@@ -769,6 +961,7 @@ export class RobloxStudioTools {
   private openCloudClient: OpenCloudClient;
   private cookieClient: RobloxCookieClient;
   private instanceManager: StudioInstanceManager;
+  private managedConnectionAssociations: Promise<void> = Promise.resolve();
 
   constructor(bridge: BridgeService) {
     this.client = new StudioHttpClient(bridge);
@@ -776,7 +969,21 @@ export class RobloxStudioTools {
     this.openCloudClient = new OpenCloudClient();
     this.cookieClient = new RobloxCookieClient();
     this.instanceManager = new StudioInstanceManager();
-    this.bridge.onInstanceRegistered((instance) => this._associateManagedEditConnection(instance));
+    this.bridge.onInstanceRegistered((instance) => {
+      const instanceManager = this.instanceManager;
+      const association = this.managedConnectionAssociations.then(() =>
+        this._associateManagedEditConnection(instance, instanceManager),
+      );
+      this.managedConnectionAssociations = association.catch((error) => {
+        console.warn(
+          `[robloxstudio-mcp] managed Studio connection association failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
+    });
+  }
+
+  getStudioLifecycleCapabilities() {
+    return this.instanceManager.getLifecycleCapabilities();
   }
 
   private _textResult(body: Record<string, unknown>) {
@@ -1174,7 +1381,8 @@ export class RobloxStudioTools {
     if (typeof state !== 'object' || state === null || Array.isArray(state)) {
       return state;
     }
-    const { devices: _devices, ...rest } = state as Record<string, unknown>;
+    const rest = { ...(state as Record<string, unknown>) };
+    delete rest.devices;
     return rest;
   }
 
@@ -2339,7 +2547,8 @@ export class RobloxStudioTools {
         entrySummaries.push(entrySummary);
 
         try {
-          const { label: _label, ...settings } = entry;
+          const settings = { ...entry };
+          delete settings.label;
           const applied = await this._executeDeviceSimulatorOperation(
             resolved.instanceId,
             resolved.role,
@@ -2486,7 +2695,15 @@ export class RobloxStudioTools {
       nextSince?: number;
       error?: string;
     };
-    type Entry = { seq: number; ts: number; level: string; message: string; capturedBy?: string; peer?: string };
+    type Entry = {
+      seq: number;
+      ts: number;
+      level: string;
+      message: string;
+      data?: Record<string, unknown>;
+      capturedBy?: string;
+      peer?: string;
+    };
     const originPeerReliable = targets.length > 0
       ? await this._isMultiplayerTestRunning(targets[0].targetInstanceId)
       : false;
@@ -2778,11 +2995,11 @@ export class RobloxStudioTools {
     return `${instance.instanceId}:${instance.role}:${instance.connectedAt}`;
   }
 
-  private _isLatestPublishedPlaceOpen(placeId: number): boolean {
+  private async _isLatestPublishedPlaceOpen(placeId: number): Promise<boolean> {
     const publishedInstanceId = `place:${placeId}`;
     return this.bridge.getPublicInstances().some((instance) =>
       instance.placeId === placeId || instance.instanceId === publishedInstanceId,
-    ) || this.instanceManager.list().some((record) =>
+    ) || (await this.instanceManager.list()).some((record) =>
       record.closedAt === undefined &&
       record.source === 'published_place' &&
       record.placeId === placeId,
@@ -2800,13 +3017,16 @@ export class RobloxStudioTools {
     return true;
   }
 
-  private _associateManagedEditConnection(instance: PublicPluginInstance): void {
+  private async _associateManagedEditConnection(
+    instance: PublicPluginInstance,
+    instanceManager: StudioInstanceManager,
+  ): Promise<void> {
     if (instance.role !== 'edit') return;
-    const candidate = this.instanceManager.pendingLaunches()
+    const candidate = (await instanceManager.pendingLaunches())
       .filter((record) => instance.connectedAt >= record.launchedAt - 1000)
       .filter((record) => this._matchesManagedLaunch(record, instance))
       .sort((a, b) => a.launchedAt - b.launchedAt)[0];
-    if (candidate) this.instanceManager.attachInstanceId(candidate, instance.instanceId);
+    if (candidate) await instanceManager.attachInstanceId(candidate, instance.instanceId);
   }
 
   private async _deriveUniverseId(placeId: number): Promise<number> {
@@ -2829,7 +3049,7 @@ export class RobloxStudioTools {
   ): Promise<PublicPluginInstance | undefined> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      this.instanceManager.refresh(record);
+      await this.instanceManager.refresh(record);
       if (record.state === 'failed' || record.state === 'exited' || record.closedAt !== undefined) {
         return undefined;
       }
@@ -2847,7 +3067,6 @@ export class RobloxStudioTools {
   }
 
   private _managedStatus(record: ManagedStudioInstance): Record<string, unknown> {
-    this.instanceManager.refresh(record);
     const connected = record.instanceId
       ? this.bridge.getPublicInstances().filter((instance) => instance.instanceId === record.instanceId)
       : [];
@@ -2857,7 +3076,25 @@ export class RobloxStudioTools {
       managed: true,
       state: record.state,
       pid: record.nativeProcessId ?? record.spawnPid,
-      process_running: record.closedAt === undefined && record.exitedAt === undefined,
+      process_started_at_file_time: record.nativeProcessStartedAt,
+      process_authorized: record.processAuthorizationState !== 'pending',
+      process_ownership_released: record.processAuthorizationState === 'released',
+      process_running: record.closedAt !== undefined || record.exitedAt !== undefined
+        ? false
+        : record.processObservationStatus === 'running'
+          ? true
+          : record.processObservationStatus === 'not_running'
+            ? false
+            : null,
+      process_observation_status: record.processObservationStatus ?? 'unknown',
+      last_process_observation_at: record.lastProcessObservationAt
+        ? new Date(record.lastProcessObservationAt).toISOString()
+        : undefined,
+      last_successful_process_observation_at: record.lastSuccessfulProcessObservationAt
+        ? new Date(record.lastSuccessfulProcessObservationAt).toISOString()
+        : undefined,
+      last_process_observation_error: record.lastProcessObservationError,
+      consecutive_confirmed_misses: record.consecutiveConfirmedMisses ?? 0,
       source: record.source,
       local_place_file: record.localPlaceFile,
       place_id: record.placeId,
@@ -2889,11 +3126,13 @@ export class RobloxStudioTools {
 
     if (
       action !== 'launch' &&
+      action !== 'authorize' &&
+      action !== 'complete' &&
       action !== 'close' &&
       action !== 'status' &&
       action !== 'list_place_versions'
     ) {
-      throw new Error('manage_instance requires action=launch|close|status|list_place_versions');
+      throw new Error('manage_instance requires action=launch|authorize|complete|close|status|list_place_versions');
     }
 
     if (action === 'list_place_versions') {
@@ -2919,14 +3158,30 @@ export class RobloxStudioTools {
       return this._textResult(body);
     }
 
+    if (action === 'close' || action === 'status') {
+      await this.managedConnectionAssociations;
+    }
+
+    if (action === 'authorize') {
+      if (!launch_id) throw new Error('manage_instance action=authorize requires launch_id.');
+      const record = await this.instanceManager.authorizeByLaunchId(launch_id);
+      return this._textResult(this._managedStatus(record));
+    }
+
+    if (action === 'complete') {
+      if (!launch_id) throw new Error('manage_instance action=complete requires launch_id.');
+      const record = await this.instanceManager.completeByLaunchId(launch_id);
+      return this._textResult(this._managedStatus(record));
+    }
+
     if (action === 'status') {
       if (launch_id) {
-        const record = this.instanceManager.getByLaunchId(launch_id);
+        const record = await this.instanceManager.getByLaunchId(launch_id);
         if (!record) return this._textResult({ error: 'Launch is not managed.', launch_id });
         return this._textResult(this._managedStatus(record));
       }
       if (instance_id) {
-        const record = this.instanceManager.get(instance_id);
+        const record = await this.instanceManager.get(instance_id);
         const connected = this.bridge.getPublicInstances().filter((instance) => instance.instanceId === instance_id);
         if (!record && connected.length === 0) {
           return this._textResult({ error: 'Instance is not connected or managed.', instance_id });
@@ -2942,7 +3197,7 @@ export class RobloxStudioTools {
         });
       }
       return this._textResult({
-        managed: this.instanceManager.list()
+        managed: (await this.instanceManager.list())
           .filter((record) => record.closedAt === undefined)
           .map((record) => this._managedStatus(record)),
         connected: this.bridge.getPublicInstances().map((instance) => ({
@@ -2957,11 +3212,11 @@ export class RobloxStudioTools {
     if (action === 'close') {
       let record: ManagedStudioInstance | undefined;
       if (launch_id) {
-        record = this.instanceManager.getByLaunchId(launch_id);
+        record = await this.instanceManager.getByLaunchId(launch_id);
         if (!record) return this._textResult({ error: 'Launch is not managed.', launch_id });
         const connectedInstanceId = record.instanceId;
         const closeResult = record.closedAt === undefined
-          ? this.instanceManager.close(record)
+          ? await this.instanceManager.close(record)
           : { status: 'already_closed' as const };
         if (connectedInstanceId) {
           await this.bridge.unregisterInstanceIdEverywhere(connectedInstanceId);
@@ -2970,23 +3225,25 @@ export class RobloxStudioTools {
         }
         return this._textResult({
           ...this._managedStatus(record),
+          close_status: closeResult.status,
           message: closeResult.status === 'already_closed'
             ? 'Studio instance was already closed.'
             : 'Studio instance closed.',
         });
       }
       if (instance_id) {
-        const recordBeforeClose = this.instanceManager.get(instance_id);
-        const managedClose = this.instanceManager.closeByInstanceId(instance_id);
+        const recordBeforeClose = await this.instanceManager.get(instance_id);
+        const managedClose = await this.instanceManager.closeByInstanceId(instance_id);
         if (managedClose.status !== 'not_found') {
           await this.bridge.unregisterInstanceIdEverywhere(instance_id);
           await sleep(500);
           await this.bridge.unregisterInstanceIdEverywhere(instance_id);
-          const closedRecord = recordBeforeClose ?? (managedClose.launchId
-            ? this.instanceManager.getByLaunchId(managedClose.launchId)
-            : undefined);
+          const closedRecord = managedClose.launchId
+            ? await this.instanceManager.getByLaunchId(managedClose.launchId)
+            : recordBeforeClose;
           return this._textResult({
             ...(closedRecord ? this._managedStatus(closedRecord) : { instance_id }),
+            close_status: managedClose.status,
             message: managedClose.status === 'already_closed'
               ? 'Studio instance was already closed.'
               : 'Studio instance closed.',
@@ -3002,7 +3259,7 @@ export class RobloxStudioTools {
           });
         }
         try {
-          this.instanceManager.closeConnectedInstance(edit);
+          await this.instanceManager.closeConnectedInstance(edit);
           await sleep(500);
         } catch (error) {
           return this._textResult({
@@ -3013,10 +3270,11 @@ export class RobloxStudioTools {
         await this.bridge.unregisterInstanceIdEverywhere(instance_id);
         return this._textResult({
           instance_id,
+          close_status: 'closed',
           message: 'Studio instance closed.',
         });
       } else {
-        const active = this.instanceManager.list().filter((entry) => entry.closedAt === undefined);
+        const active = (await this.instanceManager.list()).filter((entry) => entry.closedAt === undefined);
         if (active.length === 0) {
           return this._textResult({ message: 'No managed Studio instances are active.' });
         }
@@ -3030,13 +3288,14 @@ export class RobloxStudioTools {
       }
 
       if (record.instanceId) await this.bridge.unregisterInstanceIdEverywhere(record.instanceId);
-      const closeResult = this.instanceManager.close(record);
+      const closeResult = await this.instanceManager.close(record);
       if (record.instanceId) {
         await sleep(500);
         await this.bridge.unregisterInstanceIdEverywhere(record.instanceId);
       }
       return this._textResult({
         ...this._managedStatus(record),
+        close_status: closeResult.status,
         message: closeResult.status === 'already_closed'
           ? 'Studio instance was already closed.'
           : 'Studio instance closed.',
@@ -3061,8 +3320,16 @@ export class RobloxStudioTools {
       ? this._positiveInteger(request.place_version, 'place_version')
       : undefined;
     const localPlaceFile = typeof request.local_place_file === 'string' ? request.local_place_file : undefined;
+    let studioExecutable: string | undefined;
+    if (request.studio_executable !== undefined) {
+      if (typeof request.studio_executable !== 'string' || request.studio_executable.length === 0) {
+        throw new Error('studio_executable must be a non-empty string when provided.');
+      }
+      studioExecutable = request.studio_executable;
+    }
+    const processEnvironment = parseStudioProcessEnvironmentPatch(request.process_environment);
 
-    if (launchSource === 'published_place' && placeId !== undefined && this._isLatestPublishedPlaceOpen(placeId)) {
+    if (launchSource === 'published_place' && placeId !== undefined && await this._isLatestPublishedPlaceOpen(placeId)) {
       return this._textResult({
         error: 'Place is already open.',
         message: `place_id ${placeId} is already connected. Use the existing instance or launch a specific place_revision.`,
@@ -3072,7 +3339,11 @@ export class RobloxStudioTools {
     const universeId = launchSource === 'published_place' || launchSource === 'place_revision'
       ? await this._deriveUniverseId(placeId as number)
       : undefined;
-    const waitForConnection = request.wait_for_connection !== false;
+    if (request.require_process_identity !== undefined && typeof request.require_process_identity !== 'boolean') {
+      throw new Error('require_process_identity must be a boolean when provided.');
+    }
+    const requireProcessIdentity = request.require_process_identity === true;
+    const waitForConnection = !requireProcessIdentity && request.wait_for_connection !== false;
     const timeoutMs = this._optionalPositiveInteger(request.timeout_ms, 'timeout_ms') ?? 120000;
     const beforeKeys = new Set(this.bridge.getPublicInstances().map((instance) => this._publicInstanceKey(instance)));
 
@@ -3083,6 +3354,9 @@ export class RobloxStudioTools {
       universeId,
       placeVersion,
       connectionTimeoutMs: timeoutMs,
+      studioExecutable,
+      processEnvironment,
+      ...(requireProcessIdentity ? { requireProcessIdentity: true } : {}),
     });
 
     if (!waitForConnection) {
@@ -3095,11 +3369,11 @@ export class RobloxStudioTools {
     const connected = await this._waitForManagedEditConnection(record, beforeKeys, timeoutMs);
     if (!connected) {
       if (record.state === 'launching') {
-        this.instanceManager.markFailed(record, 'Studio launched, but the MCP plugin did not connect before timeout.');
+        await this.instanceManager.markFailed(record, 'Studio launched, but the MCP plugin did not connect before timeout.');
       }
       if (record.closedAt === undefined) {
         try {
-          this.instanceManager.close(record);
+          await this.instanceManager.close(record);
         } catch {
           // Best effort cleanup; the lifecycle error remains the useful result.
         }
@@ -3110,7 +3384,7 @@ export class RobloxStudioTools {
       });
     }
 
-    this.instanceManager.attachInstanceId(record, connected.instanceId);
+    await this.instanceManager.attachInstanceId(record, connected.instanceId);
     return this._textResult({
       ...this._managedStatus(record),
       message: launchSource === 'place_revision'
@@ -4459,29 +4733,55 @@ export class RobloxStudioTools {
     query?: string,
     maxResults?: number,
     sortBy?: string,
-    verifiedCreatorsOnly?: boolean
+    robloxCreatedOnly?: boolean
   ) {
-    if (!this.openCloudClient.hasApiKey()) {
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({ error: 'ROBLOX_OPEN_CLOUD_API_KEY environment variable is not set. Set it to use Creator Store asset tools.' })
-        }]
-      };
+    const normalized = normalizeCreatorStoreSearch(assetType, query);
+    if (maxResults !== undefined && (!Number.isInteger(maxResults) || maxResults < 1 || maxResults > 100)) {
+      throw new Error('search_assets maxResults must be an integer from 1 to 100');
+    }
+    if (sortBy !== undefined && !CREATOR_STORE_SORT_CATEGORIES.has(sortBy)) {
+      throw new Error(
+        `search_assets sortBy must be one of: ${Array.from(CREATOR_STORE_SORT_CATEGORIES).join(', ')}`,
+      );
     }
 
     const response = await this.openCloudClient.searchAssets({
-      searchCategoryType: assetType as any,
-      query,
+      searchCategoryType: normalized.searchCategoryType,
+      query: normalized.effectiveQuery,
       maxPageSize: maxResults,
-      sortCategory: sortBy as any,
-      includeOnlyVerifiedCreators: verifiedCreatorsOnly,
+      sortCategory: sortBy as AssetSearchParams['sortCategory'],
+      ...(robloxCreatedOnly ? { userId: ROBLOX_CREATOR_USER_ID } : {}),
+    });
+
+    const results = response.creatorStoreAssets.flatMap((entry) => {
+      const asset = entry.asset;
+      if (!asset || !Number.isSafeInteger(asset.id) || asset.id <= 0) return [];
+      const result: Record<string, unknown> = {
+        assetId: asset.id,
+        name: asset.name,
+        description: normalizeSearchAssetDescription(asset.description),
+      };
+      if (
+        typeof asset.durationSeconds === 'number'
+        && Number.isFinite(asset.durationSeconds)
+      ) {
+        result.duration = asset.durationSeconds;
+      }
+      return [result];
     });
 
     return {
       content: [{
         type: 'text',
-        text: JSON.stringify(response)
+        text: JSON.stringify({
+          assetType: normalized.requestedAssetType,
+          query: normalized.effectiveQuery ?? '',
+          ...(normalized.searchCategoryType !== normalized.requestedAssetType
+            ? { searchedAs: normalized.searchCategoryType }
+            : {}),
+          totalResults: response.totalResults,
+          results,
+        })
       }]
     };
   }
@@ -4489,24 +4789,6 @@ export class RobloxStudioTools {
   async getAssetDetails(assetId: number) {
     if (!assetId) {
       throw new Error('Asset ID is required for get_asset_details');
-    }
-
-    if (this.cookieClient.hasCookie() && !this.openCloudClient.hasApiKey()) {
-      const results = await this.cookieClient.getAssetDetails([assetId]);
-      const asset = results[0];
-      if (!asset) {
-        return { content: [{ type: 'text', text: JSON.stringify({ error: 'Asset not found or not owned by authenticated user' }) }] };
-      }
-      return { content: [{ type: 'text', text: JSON.stringify(asset) }] };
-    }
-
-    if (!this.openCloudClient.hasApiKey()) {
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({ error: 'No auth configured. Set ROBLOSECURITY or ROBLOX_OPEN_CLOUD_API_KEY env var.' })
-        }]
-      };
     }
 
     const response = await this.openCloudClient.getAssetDetails(assetId);
@@ -4522,15 +4804,6 @@ export class RobloxStudioTools {
     if (!assetId) {
       throw new Error('Asset ID is required for get_asset_thumbnail');
     }
-    if (!this.openCloudClient.hasApiKey()) {
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({ error: 'ROBLOX_OPEN_CLOUD_API_KEY environment variable is not set. Set it to use Creator Store asset tools.' })
-        }]
-      };
-    }
-
     const result = await this.openCloudClient.getAssetThumbnail(assetId, size as any);
     if (!result) {
       return {
@@ -4700,20 +4973,193 @@ export class RobloxStudioTools {
     };
   }
 
-  async previewAsset(assetId: number, includeProperties?: boolean, maxDepth?: number, instance_id?: string) {
+  async previewAsset(
+    assetId: number,
+    includeProperties?: boolean,
+    maxDepth?: number,
+    instance_id?: string,
+    includeAudio = true,
+    maxAudioPreviews = DEFAULT_ASSET_AUDIO_PREVIEWS,
+  ) {
     if (!assetId) {
       throw new Error('Asset ID is required for preview_asset');
     }
+    if (
+      !Number.isSafeInteger(maxAudioPreviews)
+      || maxAudioPreviews < 1
+      || maxAudioPreviews > MAX_ASSET_AUDIO_PREVIEWS
+    ) {
+      throw new Error(
+        `maxAudioPreviews must be an integer between 1 and ${MAX_ASSET_AUDIO_PREVIEWS}.`,
+      );
+    }
     const response = await this._callSingle('/api/preview-asset', {
       assetId,
-      includeProperties: includeProperties ?? true,
-      maxDepth: maxDepth ?? 10
+      includeProperties: includeProperties ?? false,
+      maxDepth: maxDepth ?? DEFAULT_ASSET_PREVIEW_DEPTH,
     }, undefined, instance_id);
+
+    const responseRecord = asRecord(response);
+    if (!responseRecord) {
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({ assetId, error: 'Studio returned an invalid asset preview response.' }),
+        }],
+      };
+    }
+    const previewError = stringField(responseRecord, 'error');
+    if (previewError) {
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({ assetId, error: previewError }),
+        }],
+      };
+    }
+
+    const soundRows = asRows(responseRecord.sounds);
+    const soundsByAssetId = new Map<number, Record<string, unknown>[]>();
+    for (const sound of soundRows) {
+      const soundAssetId = robloxAssetIdFromContentId(
+        sound.assetId ?? sound.soundId ?? sound.asset,
+      );
+      if (soundAssetId === undefined) continue;
+      const rows = soundsByAssetId.get(soundAssetId) ?? [];
+      rows.push(sound);
+      soundsByAssetId.set(soundAssetId, rows);
+    }
+
+    let directAudioAsset = false;
+    if (includeAudio && soundsByAssetId.size === 0) {
+      try {
+        const details = await this.openCloudClient.getAssetDetails(assetId);
+        const detailsRecord = asRecord(details);
+        const assetRecord = asRecord(detailsRecord?.asset);
+        if (assetRecord?.assetTypeId === 3) {
+          directAudioAsset = true;
+          soundsByAssetId.set(assetId, []);
+        }
+      } catch {
+        // Structural preview remains useful when public metadata is unavailable.
+      }
+    }
+
+    const audioContent: ToolContent[] = [];
+    const audioPreviews: Record<string, unknown>[] = [];
+    let totalBytes = 0;
+    let attempted = 0;
+    for (const [soundAssetId, sources] of soundsByAssetId) {
+      const isDirectAsset = directAudioAsset && soundAssetId === assetId;
+      if (!includeAudio) {
+        continue;
+      }
+      if (attempted >= maxAudioPreviews) {
+        audioPreviews.push({
+          assetId: soundAssetId,
+          status: 'skipped_limit',
+          ...(sources.length > 0 ? { references: sources.length } : {}),
+          ...(isDirectAsset ? { direct: true } : {}),
+        });
+        continue;
+      }
+
+      const remainingBytes = MAX_INLINE_AUDIO_PREVIEW_TOTAL_BYTES - totalBytes;
+      if (remainingBytes <= 0) {
+        audioPreviews.push({
+          assetId: soundAssetId,
+          status: 'skipped_total_size_limit',
+          ...(sources.length > 0 ? { references: sources.length } : {}),
+          ...(isDirectAsset ? { direct: true } : {}),
+        });
+        continue;
+      }
+
+      attempted++;
+      try {
+        const downloaded = await this.openCloudClient.downloadAudioAssetContent(
+          soundAssetId,
+          Math.min(MAX_INLINE_AUDIO_PREVIEW_BYTES, remainingBytes),
+        );
+        totalBytes += downloaded.data.length;
+        audioPreviews.push({
+          assetId: soundAssetId,
+          status: 'included',
+          ...(sources.length > 0 ? { references: sources.length } : {}),
+          ...(isDirectAsset ? { direct: true } : {}),
+          mimeType: downloaded.mimeType,
+          bytes: downloaded.data.length,
+          contentIndex: audioContent.length + 1,
+        });
+        audioContent.push({
+          type: 'audio',
+          data: downloaded.data.toString('base64'),
+          mimeType: downloaded.mimeType,
+        });
+      } catch (error) {
+        audioPreviews.push({
+          assetId: soundAssetId,
+          status: 'unavailable',
+          ...(sources.length > 0 ? { references: sources.length } : {}),
+          ...(isDirectAsset ? { direct: true } : {}),
+          error: errorMessage(error),
+        });
+      }
+    }
+
+    const summary = asRecord(responseRecord.summary);
+    const capabilities = [
+      ['hasAnimations', 'animations'],
+      ['hasSounds', 'sounds'],
+      ['hasParticles', 'particles'],
+      ['hasVfx', 'vfx'],
+      ['hasDecalsOrTextures', 'decalsOrTextures'],
+      ['hasMeshes', 'meshes'],
+      ['hasLights', 'lights'],
+      ['hasAttachments', 'attachments'],
+    ]
+      .filter(([field]) => summary?.[field] === true)
+      .map(([, label]) => label);
+    const classes = asRecord(summary?.classCounts);
+    const compactHierarchy = compactPreviewHierarchy(responseRecord.hierarchy);
+    const compactBody: Record<string, unknown> = {
+      success: true,
+      assetId,
+      totalInstances: numberField(summary, 'totalInstances'),
+      ...(classes && Object.keys(classes).length > 0 ? { classes } : {}),
+      ...(capabilities.length > 0 ? { capabilities } : {}),
+      security: {
+        scanDepth: 'unlimited',
+        scripts: numberField(summary, 'scriptCount'),
+        packageLinks: numberField(summary, 'packageLinkCount'),
+      },
+      ...(compactHierarchy.hierarchy.length > 0
+        ? { hierarchy: compactHierarchy.hierarchy }
+        : {}),
+      ...(compactHierarchy.truncated ? { hierarchyTruncated: true } : {}),
+      ...(soundRows.length > 0
+        ? { sounds: soundRows.map(compactSoundReference) }
+        : {}),
+      ...(directAudioAsset ? { directAudioAsset: true } : {}),
+      ...(includeAudio
+        ? {
+          audio: {
+            returned: audioContent.length,
+            bytes: totalBytes,
+            ...(audioPreviews.length > 0 ? { items: audioPreviews } : {}),
+          },
+        }
+        : {}),
+    };
+
     return {
-      content: [{
-        type: 'text',
-        text: JSON.stringify(response)
-      }]
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(compactBody),
+        },
+        ...audioContent,
+      ],
     };
   }
 
@@ -4776,15 +5222,15 @@ export class RobloxStudioTools {
     instance_id?: string,
   ): Promise<number> {
     if (this.cookieClient.hasCookie()) {
-      const result = await this.cookieClient.uploadDecal(
-        imageContent,
-        STUDIO_ASSISTANT_SOURCE_IMAGE_LABEL,
-        STUDIO_ASSISTANT_SOURCE_IMAGE_LABEL,
-      );
-      if (result.backingAssetId && result.backingAssetId > 0) {
-        return result.backingAssetId;
-      }
-      return this.resolveUploadedReferenceImageId(String(result.assetId), instance_id);
+      const result = await this.cookieClient.uploadImage({
+        fileContent: imageContent,
+        fileName: 'generate-model-reference.png',
+        displayName: STUDIO_ASSISTANT_SOURCE_IMAGE_LABEL,
+        description: STUDIO_ASSISTANT_SOURCE_IMAGE_LABEL,
+        userId: process.env.ROBLOX_CREATOR_USER_ID,
+        groupId: process.env.ROBLOX_CREATOR_GROUP_ID,
+      });
+      return result.assetId;
     }
 
     if (!this.openCloudClient.hasApiKey()) {
@@ -4840,9 +5286,18 @@ export class RobloxStudioTools {
 
     const fileContent = fs.readFileSync(filePath);
     const fileName = path.basename(filePath);
+    const resolvedGroupId = groupId || process.env.ROBLOX_CREATOR_GROUP_ID;
+    const resolvedUserId = userId || process.env.ROBLOX_CREATOR_USER_ID;
 
     if (assetType === 'Decal' && this.cookieClient.hasCookie()) {
-      const result = await this.cookieClient.uploadDecal(fileContent, displayName, description || '');
+      const result = await this.cookieClient.uploadImage({
+        fileContent,
+        fileName,
+        displayName,
+        description: description || '',
+        userId: resolvedUserId,
+        groupId: resolvedGroupId,
+      });
       return {
         content: [{
           type: 'text',
@@ -4851,9 +5306,9 @@ export class RobloxStudioTools {
             response: {
               assetId: String(result.assetId),
               displayName,
-              assetType,
-              decalId: String(result.assetId),
-              imageId: String(result.backingAssetId),
+              assetType: 'Image',
+              decalId: null,
+              imageId: String(result.assetId),
             },
           })
         }]
@@ -4868,9 +5323,6 @@ export class RobloxStudioTools {
         `No auth configured for ${assetType} upload. Set ROBLOX_OPEN_CLOUD_API_KEY (needs asset:write scope).${cookieHint}`
       );
     }
-
-    const resolvedGroupId = groupId || process.env.ROBLOX_CREATOR_GROUP_ID;
-    const resolvedUserId = userId || process.env.ROBLOX_CREATOR_USER_ID;
 
     if (!resolvedUserId && !resolvedGroupId) {
       throw new Error(

@@ -45,6 +45,10 @@ Complete your AI assistant integration with this easy-to-install Studio plugin. 
 ### 1. Enable HTTP Requests (Required)
 **Game Settings** > **Security** > **"Allow HTTP Requests"**
 
+To preview or insert public Creator Store assets that you do not own, also
+enable **"Allow Loading Third Party Assets"** on the same Security page.
+Roblox disables this setting by default.
+
 ### 2. Activate the Plugin
 **Plugins toolbar** > Click **"MCP Server"** button
 - **Green status** = Connected and ready

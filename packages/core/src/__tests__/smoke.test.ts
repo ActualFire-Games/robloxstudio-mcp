@@ -1,10 +1,11 @@
 import { BridgeService } from '../bridge-service.js';
 import { createHttpServer } from '../http-server.js';
 import { RobloxStudioTools } from '../tools/index.js';
-import { buildStudioLaunchArgs, buildWindowsStudioStartScript, cleanupManagedBaseplateFiles, quoteWindowsCommandLineArg, StudioInstanceManager, sweepStaleBaseplateFiles } from '../studio-instance-manager.js';
+import { buildStudioLaunchArgs, buildWindowsStudioStartScript, buildWindowsStudioStopScript, cleanupManagedBaseplateFiles, isWsl, quoteWindowsCommandLineArg, StudioInstanceManager, sweepStaleBaseplateFiles } from '../studio-instance-manager.js';
+import { detectStudioPlatform } from '../studio-platform.js';
 import { ManagedInstanceRegistry } from '../managed-instance-registry.js';
 import request from 'supertest';
-import { spawnSync } from 'child_process';
+import { spawnSync, type SpawnOptions } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -47,6 +48,92 @@ function readRegistryEvents(registryDir: string): Record<string, unknown>[] {
 }
 
 describe('Smoke', () => {
+  test('sanitized Codex environment still detects a WSL host with working Windows interop', () => {
+    const kernelVersion = process.platform === 'linux' && fs.existsSync('/proc/version')
+      ? fs.readFileSync('/proc/version', 'utf8')
+      : '';
+    if (!/microsoft|wsl/i.test(kernelVersion)) return;
+
+    const previousInterop = process.env.WSL_INTEROP;
+    const previousDistroName = process.env.WSL_DISTRO_NAME;
+    delete process.env.WSL_INTEROP;
+    delete process.env.WSL_DISTRO_NAME;
+    try {
+      expect(isWsl()).toBe(true);
+    } finally {
+      if (previousInterop === undefined) delete process.env.WSL_INTEROP;
+      else process.env.WSL_INTEROP = previousInterop;
+      if (previousDistroName === undefined) delete process.env.WSL_DISTRO_NAME;
+      else process.env.WSL_DISTRO_NAME = previousDistroName;
+    }
+  });
+
+  test('sanitized WSL capability selects the retained Windows launcher boundary', async () => {
+    const registryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'robloxstudio-mcp-registry-'));
+    const platformCapabilities = detectStudioPlatform({
+      platform: 'linux',
+      kernelVersion: 'Linux version 6.6.87.2-microsoft-standard-WSL2',
+      windowsInteropAvailable: true,
+    });
+    let launcherCalls = 0;
+    let abortCalls = 0;
+
+    try {
+      const manager = new StudioInstanceManager({
+        registryDir,
+        platformCapabilities,
+        processAdapter: {
+          currentBootId: () => 'boot-1',
+          observeStudioProcesses: () => ({
+            status: 'ok',
+            observedAt: Date.now(),
+            processes: [],
+          }),
+          resolveStudioExe: () => 'C:\\Roblox\\RobloxStudioBeta.exe',
+        },
+        windowsStudioLauncher: () => {
+          launcherCalls += 1;
+          return {
+            pid: 9001,
+            nativePid: 7101,
+            nativeStartedAt: '133700123499',
+            unref: () => {},
+            authorize: () => {},
+            release: () => {},
+            abort: () => {
+              abortCalls += 1;
+            },
+          };
+        },
+      });
+
+      expect(manager.getLifecycleCapabilities()).toMatchObject({
+        hostPlatform: 'wsl',
+        processIdentity: {
+          supported: true,
+          launcher: 'wsl-windows-retained',
+        },
+      });
+
+      const record = await manager.launch({
+        source: 'local_file',
+        localPlaceFile: '/tmp/sanitized-codex-wsl.rbxl',
+        requireProcessIdentity: true,
+      });
+      expect(launcherCalls).toBe(1);
+      expect(record).toMatchObject({
+        nativeProcessId: 7101,
+        nativeProcessStartedAt: '133700123499',
+        processAuthorizationState: 'pending',
+      });
+
+      await manager.close(record);
+      expect(abortCalls).toBe(1);
+    } finally {
+      fs.rmSync(registryDir, { recursive: true, force: true });
+    }
+  });
+
   test('source does not force playtest shutdown with brittle fallbacks', () => {
     const cwd = process.cwd();
     const repoRoot = fs.existsSync(path.join(cwd, 'studio-plugin')) ? cwd : path.resolve(cwd, '../..');
@@ -81,8 +168,74 @@ describe('Smoke', () => {
       ['--task', 'EditFile', '--localPlaceFile', 'C:\\Places\\Baseplate.rbxl'],
     );
 
-    expect(script).toContain('$psi.UseShellExecute = $true');
-    expect(script).not.toContain('$psi.UseShellExecute = $false');
+    expect(script).toContain('CREATE_SUSPENDED');
+    expect(script).toContain('JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE');
+    expect(script).toContain('AssignProcessToJobObject');
+    expect(script).toContain('Marshal.GetLastWin32Error() == 5');
+    expect(script).toContain(
+      'public uint dwXCountChars;\n        public uint dwYCountChars;\n        public uint dwFillAttribute;\n        public uint dwFlags;',
+    );
+    expect(script).toContain('$launch = [McpSuspendedStudio]::Start(');
+    expect(script).toContain('$launch.Resume()');
+    expect(script).toContain('$launch.Abort()');
+    expect(script).toContain(
+      'elseif ($command -eq "MCP_STUDIO_LAUNCH_ABORT") { $launch.Abort(); $accepted = $true }',
+    );
+    expect(script).toContain(
+      'if ($command -eq "MCP_STUDIO_LAUNCH_COMPLETE") { $launch.Release(); $accepted = $true }\n' +
+      'elseif ($command -eq "MCP_STUDIO_LAUNCH_ABORT") { $launch.Abort(); $accepted = $true }',
+    );
+    expect(script).toContain('TerminateAndWait(created.hProcess)');
+    expect(script).toContain('TerminateAndWait(process)');
+    expect(script).toContain('WaitForSingleObject(processHandle, 15000)');
+    expect(script).toContain('$launch.StartedAtFileTime');
+    expect(script).not.toContain('$psi.UseShellExecute');
+  });
+
+  test('Windows Studio shutdown uses a creation-checked process handle', () => {
+    const script = buildWindowsStudioStopScript(47312, '133700123456');
+
+    expect(script).toContain(
+      '[System.Diagnostics.Process]::GetProcessById($processId)',
+    );
+    expect(script).toContain(
+      '$studio.StartTime.ToUniversalTime().ToFileTimeUtc()',
+    );
+    expect(script).toContain(
+      'if ($actualStartedAt -ne $expectedStartedAt) { return }',
+    );
+    expect(script).toContain('$studio.Kill()');
+    expect(script).toContain('$studio.WaitForExit()');
+    expect(script).not.toContain('Stop-Process');
+  });
+
+  test('WSL Studio launch applies validated environment values as PowerShell data', () => {
+    const script = buildWindowsStudioStartScript(
+      'C:\\Roblox\\RobloxStudioBeta.exe',
+      ['--task', 'EditFile'],
+      {
+        set: {
+          STUDIO_LAUNCH_LOADER: "C:\\LaunchTools\\loader's; $env:SHOULD_NOT_RUN.dll",
+          STUDIO_LAUNCH_BUILD_VERSION: '0.0.0+build.123',
+        },
+        remove: ['STUDIO_LAUNCH_LOADED_BUILD_VERSION'],
+      },
+    );
+
+    expect(script).toContain(
+      "[Environment]::SetEnvironmentVariable('STUDIO_LAUNCH_LOADER', 'C:\\LaunchTools\\loader''s; $env:SHOULD_NOT_RUN.dll', [EnvironmentVariableTarget]::Process)",
+    );
+    expect(script).toContain(
+      "[Environment]::SetEnvironmentVariable('STUDIO_LAUNCH_LOADED_BUILD_VERSION', $null, [EnvironmentVariableTarget]::Process)",
+    );
+    expect(script.indexOf("'STUDIO_LAUNCH_LOADER'")).toBeLessThan(
+      script.indexOf('[McpSuspendedStudio]::Start('),
+    );
+    expect(script).toContain('CREATE_SUSPENDED');
+
+    expect(() => buildWindowsStudioStartScript('Studio.exe', [], {
+      set: { 'STUDIO_LAUNCH_LOADER; Remove-Item Env:PATH': 'loader.dll' },
+    })).toThrow(/Invalid process environment variable name/);
   });
 
   test('HTTP server starts and responds to health check', async () => {
@@ -210,6 +363,8 @@ describe('Smoke', () => {
       universeId: 456,
       placeVersion: 7,
       connectionTimeoutMs: 120000,
+      studioExecutable: undefined,
+      processEnvironment: undefined,
     });
   });
 
@@ -254,7 +409,126 @@ describe('Smoke', () => {
       universeId: undefined,
       placeVersion: undefined,
       connectionTimeoutMs: 120000,
+      studioExecutable: undefined,
+      processEnvironment: undefined,
     });
+  });
+
+  test('manage_instance threads exact executable and process environment into launch', async () => {
+    const bridge = new BridgeService();
+    const tools = new RobloxStudioTools(bridge);
+    const launch = jest.fn(async (options) => ({
+      ...options,
+      recordId: 'launch-custom',
+      nativeProcessId: 7003,
+      exe: options.studioExecutable,
+      args: [],
+      launchedAt: Date.now(),
+      state: 'launching',
+    }));
+    (tools as any).instanceManager = {
+      list: () => [],
+      launch,
+      refresh: (record: unknown) => record,
+    };
+
+    await tools.manageInstance({
+      action: 'launch',
+      source: 'local_file',
+      local_place_file: '/tmp/custom-launch-place.rbxl',
+      wait_for_connection: false,
+      studio_executable: 'C:\\Roblox\\version-custom\\RobloxStudioBeta.exe',
+      process_environment: {
+        set: {
+          STUDIO_LAUNCH_LOADER: 'C:\\LaunchTools\\studio_loader.dll',
+          STUDIO_LAUNCH_BUILD_VERSION: '0.0.0+build.123',
+        },
+        remove: ['STUDIO_LAUNCH_LOADED_BUILD_VERSION'],
+      },
+    });
+
+    expect(launch).toHaveBeenCalledWith(expect.objectContaining({
+      studioExecutable: 'C:\\Roblox\\version-custom\\RobloxStudioBeta.exe',
+      processEnvironment: {
+        set: {
+          STUDIO_LAUNCH_LOADER: 'C:\\LaunchTools\\studio_loader.dll',
+          STUDIO_LAUNCH_BUILD_VERSION: '0.0.0+build.123',
+        },
+        remove: ['STUDIO_LAUNCH_LOADED_BUILD_VERSION'],
+      },
+    }));
+
+    await expect(tools.manageInstance({
+      action: 'launch',
+      source: 'local_file',
+      local_place_file: '/tmp/custom-launch-place.rbxl',
+      process_environment: { remove: ['STUDIO_LAUNCH_LOADED_BUILD_VERSION; whoami'] },
+    })).rejects.toThrow(/Invalid process environment variable name/);
+  });
+
+  test('Studio launch uses the exact executable, patches only the child environment, and does not persist it', async () => {
+    const registryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'robloxstudio-mcp-registry-'));
+    const exactExecutable = 'C:\\Roblox\\version-custom\\RobloxStudioBeta.exe';
+    const parentLoadedVersion = process.env.STUDIO_LAUNCH_LOADED_BUILD_VERSION;
+    const liveProcessIds = new Set<number>();
+    const resolveStudioExe = jest.fn(() => 'C:\\Roblox\\latest\\RobloxStudioBeta.exe');
+    let capturedSpawnOptions: SpawnOptions | undefined;
+    process.env.STUDIO_LAUNCH_LOADED_BUILD_VERSION = 'parent-value';
+
+    const processAdapter = {
+      currentBootId: () => 'boot-1',
+      resolveStudioExe,
+      spawnStudio: (_exe: string, _args: string[], options: SpawnOptions) => {
+        capturedSpawnOptions = options;
+        liveProcessIds.add(7655);
+        return { pid: 7655, nativePid: 7655, unref: () => {} };
+      },
+      listStudioProcesses: () => [...liveProcessIds].map((Id) => ({
+        Id,
+        Name: 'RobloxStudioBeta',
+        Path: exactExecutable,
+        MainWindowTitle: 'Custom Launch - Roblox Studio',
+      })),
+      stopProcess: (pid: number) => liveProcessIds.delete(pid),
+    };
+
+    try {
+      const manager = new StudioInstanceManager({ registryDir, processAdapter });
+      const record = await manager.launch({
+        source: 'local_file',
+        localPlaceFile: '/tmp/custom-launch-place.rbxl',
+        studioExecutable: exactExecutable,
+        processEnvironment: {
+          set: {
+            STUDIO_LAUNCH_LOADER: 'C:\\LaunchTools\\secret-loader.dll',
+            STUDIO_LAUNCH_BUILD_VERSION: '0.0.0+build.123',
+          },
+          remove: ['STUDIO_LAUNCH_LOADED_BUILD_VERSION'],
+        },
+      });
+
+      expect(resolveStudioExe).not.toHaveBeenCalled();
+      expect(record.exe).toBe(exactExecutable);
+      expect((capturedSpawnOptions?.env as NodeJS.ProcessEnv).STUDIO_LAUNCH_LOADER).toBe('C:\\LaunchTools\\secret-loader.dll');
+      expect((capturedSpawnOptions?.env as NodeJS.ProcessEnv).STUDIO_LAUNCH_BUILD_VERSION).toBe('0.0.0+build.123');
+      expect((capturedSpawnOptions?.env as NodeJS.ProcessEnv).STUDIO_LAUNCH_LOADED_BUILD_VERSION).toBeUndefined();
+      expect(process.env.STUDIO_LAUNCH_LOADED_BUILD_VERSION).toBe('parent-value');
+
+      const registryRecord = fs.readFileSync(
+        path.join(registryDir, `${record.recordId}.json`),
+        'utf8',
+      );
+      expect(registryRecord).toContain(exactExecutable.replace(/\\/g, '\\\\'));
+      expect(registryRecord).not.toContain('STUDIO_LAUNCH_LOADER');
+      expect(registryRecord).not.toContain('secret-loader.dll');
+      expect(registryRecord).not.toContain('processEnvironment');
+
+      await manager.close(record);
+    } finally {
+      if (parentLoadedVersion === undefined) delete process.env.STUDIO_LAUNCH_LOADED_BUILD_VERSION;
+      else process.env.STUDIO_LAUNCH_LOADED_BUILD_VERSION = parentLoadedVersion;
+      fs.rmSync(registryDir, { recursive: true, force: true });
+    }
   });
 
   test('Studio launch stops its owned process if the initial registry write fails', async () => {
@@ -296,6 +570,454 @@ describe('Smoke', () => {
       fs.rmSync(registryDir, { recursive: true, force: true });
     }
   });
+  test('Studio launch stops its owned process when creation identity cannot be captured', async () => {
+    const registryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'robloxstudio-mcp-registry-'));
+    const registry = new ManagedInstanceRegistry(registryDir);
+    const liveProcessIds = new Set<number>();
+    const stopped: number[] = [];
+    const processAdapter = {
+      currentBootId: () => 'boot-1',
+      resolveStudioExe: () => 'RobloxStudioBeta.exe',
+      spawnStudio: () => {
+        liveProcessIds.add(7655);
+        return {
+          pid: 9005,
+          nativePid: 7655,
+          unref: () => {},
+          abort: () => {
+            stopped.push(7655);
+            liveProcessIds.delete(7655);
+          },
+        };
+      },
+      listStudioProcesses: () => [...liveProcessIds].map((Id) => ({
+        Id,
+        Name: 'RobloxStudioBeta',
+        Path: 'RobloxStudioBeta.exe',
+        MainWindowTitle: 'Identity Test - Roblox Studio',
+      })),
+      stopProcess: () => {
+        throw new Error('PID-only cleanup must not run.');
+      },
+    };
+
+    try {
+      const manager = new StudioInstanceManager({ registry, processAdapter });
+      await expect(manager.launch({
+        source: 'local_file',
+        localPlaceFile: '/tmp/identity-test.rbxl',
+        requireProcessIdentity: true,
+      })).rejects.toThrow(/exact creation identity and suspended-process control handles/);
+      expect(stopped).toEqual([7655]);
+      expect(liveProcessIds.size).toBe(0);
+    } finally {
+      fs.rmSync(registryDir, { recursive: true, force: true });
+    }
+  });
+
+  test('identity-required launch rejects adapters without suspended-process controls', async () => {
+    const registryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'robloxstudio-mcp-registry-'));
+    const registry = new ManagedInstanceRegistry(registryDir);
+    const stopped: Array<{ pid: number; startedAt?: string }> = [];
+    const processAdapter = {
+      currentBootId: () => 'boot-1',
+      resolveStudioExe: () => 'RobloxStudioBeta.exe',
+      spawnStudio: () => ({
+        pid: 9008,
+        nativePid: 7659,
+        nativeStartedAt: '133700123460',
+        unref: () => {},
+      }),
+      listStudioProcesses: () => [{
+        Id: 7659,
+        Name: 'RobloxStudioBeta',
+        Path: 'RobloxStudioBeta.exe',
+        MainWindowTitle: 'Missing Controls Test - Roblox Studio',
+        StartTimeUtcFileTime: '133700123460',
+      }],
+      stopProcess: (pid: number, startedAt?: string) => {
+        stopped.push({ pid, startedAt });
+      },
+    };
+
+    try {
+      const manager = new StudioInstanceManager({ registry, processAdapter });
+      await expect(manager.launch({
+        source: 'local_file',
+        localPlaceFile: '/tmp/missing-controls-test.rbxl',
+        requireProcessIdentity: true,
+      })).rejects.toThrow(/suspended-process control handles/);
+      expect(stopped).toEqual([{ pid: 7659, startedAt: '133700123460' }]);
+    } finally {
+      fs.rmSync(registryDir, { recursive: true, force: true });
+    }
+  });
+
+  test('identity-required launch retains ownership until explicitly completed', async () => {
+    const registryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'robloxstudio-mcp-registry-'));
+    const registry = new ManagedInstanceRegistry(registryDir);
+    const liveProcessIds = new Set<number>();
+    const resumed: number[] = [];
+    const released: number[] = [];
+    const stopped: number[] = [];
+    const processAdapter = {
+      currentBootId: () => 'boot-1',
+      resolveStudioExe: () => 'RobloxStudioBeta.exe',
+      spawnStudio: () => {
+        liveProcessIds.add(7656);
+        return {
+          pid: 9006,
+          nativePid: 7656,
+          nativeStartedAt: '133700123457',
+          unref: () => {},
+          authorize: () => resumed.push(7656),
+          release: () => released.push(7656),
+          abort: () => {
+            stopped.push(7656);
+            liveProcessIds.delete(7656);
+          },
+        };
+      },
+      listStudioProcesses: () => [...liveProcessIds].map((Id) => ({
+        Id,
+        Name: 'RobloxStudioBeta',
+        Path: 'RobloxStudioBeta.exe',
+        MainWindowTitle: 'Authorization Test - Roblox Studio',
+        StartTimeUtcFileTime: '133700123457',
+      })),
+      stopProcess: (pid: number) => {
+        stopped.push(pid);
+        liveProcessIds.delete(pid);
+      },
+    };
+
+    try {
+      const manager = new StudioInstanceManager({
+        registry,
+        processAdapter,
+        confirmedExitMisses: 1,
+        confirmedExitGraceMs: 0,
+        snapshotCacheMs: 0,
+      });
+      const tools = new RobloxStudioTools(new BridgeService());
+      Object.defineProperty(tools, 'instanceManager', { value: manager });
+      const launchStatus = JSON.parse((await tools.manageInstance({
+        action: 'launch',
+        source: 'local_file',
+        local_place_file: '/tmp/authorization-test.rbxl',
+        require_process_identity: true,
+      })).content[0].text);
+      expect(launchStatus).toEqual(expect.objectContaining({
+        launch_id: expect.any(String),
+        process_authorized: false,
+        process_running: true,
+        message: 'Studio launch requested.',
+      }));
+      const launchId = launchStatus.launch_id;
+      if (typeof launchId !== 'string') throw new Error('launch_id was not returned');
+      const launched = manager.peekByLaunchId(launchId)!;
+      expect(launched.processAuthorizationState).toBe('pending');
+      expect(launched.connectionDeadlineAt).toBeUndefined();
+      expect(resumed).toEqual([]);
+
+      const authorizedStatus = JSON.parse((await tools.manageInstance({
+        action: 'authorize',
+        launch_id: launched.recordId,
+      })).content[0].text);
+      expect(authorizedStatus).toEqual(expect.objectContaining({
+        launch_id: launched.recordId,
+        process_authorized: true,
+        process_running: true,
+      }));
+      const authorized = manager.peekByLaunchId(launched.recordId!)!;
+      expect(authorized.processAuthorizationState).toBe('authorized');
+      expect(resumed).toEqual([7656]);
+      expect(released).toEqual([]);
+
+      const completedStatus = JSON.parse((await tools.manageInstance({
+        action: 'complete',
+        launch_id: launched.recordId,
+      })).content[0].text);
+      expect(completedStatus).toEqual(expect.objectContaining({
+        launch_id: launched.recordId,
+        process_authorized: true,
+        process_ownership_released: true,
+        process_running: true,
+      }));
+      const completed = manager.peekByLaunchId(launched.recordId!)!;
+      expect(completed.processAuthorizationState).toBe('released');
+      expect(released).toEqual([7656]);
+
+      await manager.close(completed);
+      expect(stopped).toEqual([7656]);
+
+      const interrupted = await manager.launch({
+        source: 'local_file',
+        localPlaceFile: '/tmp/interrupted-authorization-test.rbxl',
+        requireProcessIdentity: true,
+      });
+      await manager.authorizeByLaunchId(interrupted.recordId!);
+      await manager.close(interrupted);
+      expect(released).toEqual([7656]);
+      expect(stopped).toEqual([7656, 7656]);
+
+      const crashed = await manager.launch({
+        source: 'local_file',
+        localPlaceFile: '/tmp/crashed-authorization-test.rbxl',
+        requireProcessIdentity: true,
+      });
+      await manager.authorizeByLaunchId(crashed.recordId!);
+      liveProcessIds.delete(7656);
+      await manager.list();
+      expect(crashed.state).toBe('exited');
+      expect(released).toEqual([7656]);
+      expect(stopped).toEqual([7656, 7656, 7656]);
+    } finally {
+      fs.rmSync(registryDir, { recursive: true, force: true });
+    }
+  });
+
+  test('identity-required launch aborts when its caller disappears before authorization', async () => {
+    const registryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'robloxstudio-mcp-registry-'));
+    const registry = new ManagedInstanceRegistry(registryDir);
+    const stopped: number[] = [];
+    jest.useFakeTimers();
+
+    try {
+      const manager = new StudioInstanceManager({
+        registry,
+        launchCompletionTimeoutMs: 1000,
+        processAdapter: {
+          currentBootId: () => 'boot-1',
+          resolveStudioExe: () => 'RobloxStudioBeta.exe',
+          spawnStudio: () => ({
+            pid: 9010,
+            nativePid: 7660,
+            nativeStartedAt: '133700123461',
+            unref: () => {},
+            authorize: () => {},
+            release: () => {},
+            abort: () => {
+              stopped.push(7660);
+            },
+          }),
+          listStudioProcesses: () => [{
+            Id: 7660,
+            Name: 'RobloxStudioBeta',
+            Path: 'RobloxStudioBeta.exe',
+            MainWindowTitle: 'Pre-Authorization Lease Test - Roblox Studio',
+            StartTimeUtcFileTime: '133700123461',
+          }],
+          stopProcess: () => {},
+        },
+      });
+
+      const launched = await manager.launch({
+        source: 'local_file',
+        localPlaceFile: '/tmp/pre-authorization-lease-test.rbxl',
+        requireProcessIdentity: true,
+      });
+      expect(launched.processAuthorizationState).toBe('pending');
+      expect(stopped).toEqual([]);
+
+      await jest.advanceTimersByTimeAsync(1000);
+      jest.useRealTimers();
+      const persistenceDeadline = Date.now() + 2000;
+      let persisted = await registry.findAnyByRecordId(launched.recordId!);
+      while (persisted?.state !== 'failed' && Date.now() < persistenceDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        persisted = await registry.findAnyByRecordId(launched.recordId!);
+      }
+
+      expect(persisted?.state).toBe('failed');
+      expect(launched.failureReason).toContain('did not complete Studio launch ownership transfer');
+      expect(stopped).toEqual([7660]);
+    } finally {
+      jest.useRealTimers();
+      fs.rmSync(registryDir, { recursive: true, force: true });
+    }
+  });
+
+  test('ownership lease does not race active authorization or release', async () => {
+    const registryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'robloxstudio-mcp-registry-'));
+    let authorizeStarted = false;
+    let releaseStarted = false;
+    let resolveAuthorize: (() => void) | undefined;
+    let resolveRelease: (() => void) | undefined;
+    const stopped: number[] = [];
+    jest.useFakeTimers();
+
+    try {
+      const manager = new StudioInstanceManager({
+        registry: new ManagedInstanceRegistry(registryDir),
+        launchCompletionTimeoutMs: 1000,
+        processAdapter: {
+          currentBootId: () => 'boot-1',
+          resolveStudioExe: () => 'RobloxStudioBeta.exe',
+          spawnStudio: () => ({
+            pid: 9011,
+            nativePid: 7661,
+            nativeStartedAt: '133700123462',
+            unref: () => {},
+            authorize: () => {
+              authorizeStarted = true;
+              return new Promise<void>((resolve) => {
+                resolveAuthorize = resolve;
+              });
+            },
+            release: () => {
+              releaseStarted = true;
+              return new Promise<void>((resolve) => {
+                resolveRelease = resolve;
+              });
+            },
+            abort: () => {
+              stopped.push(7661);
+            },
+          }),
+          listStudioProcesses: () => [{
+            Id: 7661,
+            Name: 'RobloxStudioBeta',
+            Path: 'RobloxStudioBeta.exe',
+            MainWindowTitle: 'Ownership Lease Race Test - Roblox Studio',
+            StartTimeUtcFileTime: '133700123462',
+          }],
+          stopProcess: () => {},
+        },
+      });
+      const launched = await manager.launch({
+        source: 'local_file',
+        localPlaceFile: '/tmp/ownership-lease-race-test.rbxl',
+        requireProcessIdentity: true,
+      });
+
+      await jest.advanceTimersByTimeAsync(999);
+      const authorizing = manager.authorizeByLaunchId(launched.recordId!);
+      await Promise.resolve();
+      expect(authorizeStarted).toBe(true);
+      await jest.advanceTimersByTimeAsync(2);
+      expect(stopped).toEqual([]);
+      resolveAuthorize!();
+      const authorized = await authorizing;
+      expect(authorized.processAuthorizationState).toBe('authorized');
+
+      await jest.advanceTimersByTimeAsync(999);
+      const completing = manager.completeByLaunchId(launched.recordId!);
+      await Promise.resolve();
+      expect(releaseStarted).toBe(true);
+      await jest.advanceTimersByTimeAsync(2);
+      expect(stopped).toEqual([]);
+      resolveRelease!();
+      const completed = await completing;
+      expect(completed.processAuthorizationState).toBe('released');
+    } finally {
+      jest.useRealTimers();
+      fs.rmSync(registryDir, { recursive: true, force: true });
+    }
+  });
+
+  test('failed launch authorization aborts the suspended process', async () => {
+    const registryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'robloxstudio-mcp-registry-'));
+    const registry = new ManagedInstanceRegistry(registryDir);
+    const liveProcessIds = new Set<number>();
+    const stopped: number[] = [];
+    const processAdapter = {
+      currentBootId: () => 'boot-1',
+      resolveStudioExe: () => 'RobloxStudioBeta.exe',
+      spawnStudio: () => {
+        liveProcessIds.add(7657);
+        return {
+          pid: 9007,
+          nativePid: 7657,
+          nativeStartedAt: '133700123458',
+          unref: () => {},
+          release: () => {},
+          authorize: () => {
+            throw new Error('resume failed');
+          },
+          abort: () => {
+            stopped.push(7657);
+            liveProcessIds.delete(7657);
+          },
+        };
+      },
+      listStudioProcesses: () => [...liveProcessIds].map((Id) => ({
+        Id,
+        Name: 'RobloxStudioBeta',
+        Path: 'RobloxStudioBeta.exe',
+        MainWindowTitle: 'Authorization Failure Test - Roblox Studio',
+        StartTimeUtcFileTime: '133700123458',
+      })),
+      stopProcess: () => {
+        throw new Error('PID-only cleanup must not run.');
+      },
+    };
+
+    try {
+      const manager = new StudioInstanceManager({ registry, processAdapter });
+      const launched = await manager.launch({
+        source: 'local_file',
+        localPlaceFile: '/tmp/authorization-failure-test.rbxl',
+        requireProcessIdentity: true,
+      });
+      await expect(manager.authorizeByLaunchId(launched.recordId!)).rejects.toThrow('resume failed');
+      expect(stopped).toEqual([7657]);
+      expect(liveProcessIds.size).toBe(0);
+      expect(launched.state).toBe('failed');
+    } finally {
+      fs.rmSync(registryDir, { recursive: true, force: true });
+    }
+  });
+
+  test('broker restart exact-stops an orphaned authorized launch', async () => {
+    const registryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'robloxstudio-mcp-registry-'));
+    const registry = new ManagedInstanceRegistry(registryDir);
+    const stopped: Array<{ pid: number; startedAt?: string }> = [];
+    await registry.upsert({
+      version: 1,
+      recordId: 'orphaned-authorized-launch',
+      source: 'local_file',
+      nativeProcessId: 7658,
+      nativeProcessStartedAt: '133700123459',
+      spawnPid: 7658,
+      exe: 'RobloxStudioBeta.exe',
+      args: ['--task', 'EditFile'],
+      localPlaceFile: '/tmp/orphaned-authorization-test.rbxl',
+      launchedAt: Date.now() - 1000,
+      connectionDeadlineAt: Date.now() + 120000,
+      state: 'launching',
+      ownerPid: 2_147_483_647,
+      bootId: 'boot-1',
+      processObservationStatus: 'running',
+      processAuthorizationState: 'authorized',
+    });
+    const processAdapter = {
+      currentBootId: () => 'boot-1',
+      listStudioProcesses: () => [{
+        Id: 7658,
+        Name: 'RobloxStudioBeta',
+        Path: 'RobloxStudioBeta.exe',
+        MainWindowTitle: 'Orphaned Authorization Test - Roblox Studio',
+        StartTimeUtcFileTime: '133700123459',
+      }],
+      stopProcess: (pid: number, startedAt?: string) => {
+        stopped.push({ pid, startedAt });
+      },
+    };
+
+    try {
+      const manager = new StudioInstanceManager({ registry, processAdapter });
+      const recovered = await manager.getByLaunchId('orphaned-authorized-launch');
+      expect(stopped).toEqual([{ pid: 7658, startedAt: '133700123459' }]);
+      expect(recovered).toEqual(expect.objectContaining({
+        state: 'failed',
+        closedAt: expect.any(Number),
+        failureReason: 'Orphaned unreleased Studio launch was stopped after its broker owner exited.',
+      }));
+    } finally {
+      fs.rmSync(registryDir, { recursive: true, force: true });
+    }
+  });
 
   test('manage_instance asynchronously associates and closes a no-wait local-file launch', async () => {
     const registryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'robloxstudio-mcp-registry-'));
@@ -307,13 +1029,19 @@ describe('Smoke', () => {
       resolveStudioExe: () => 'RobloxStudioBeta.exe',
       spawnStudio: () => {
         liveProcessIds.add(4321);
-        return { pid: 9001, nativePid: 4321, unref: () => {} };
+        return {
+          pid: 9001,
+          nativePid: 4321,
+          nativeStartedAt: '133700123456',
+          unref: () => {},
+        };
       },
       listStudioProcesses: () => [...liveProcessIds].map((Id) => ({
         Id,
         Name: 'RobloxStudioBeta',
         Path: 'RobloxStudioBeta.exe',
         MainWindowTitle: Id === 4321 ? 'Roblox Studio' : 'Other - Roblox Studio',
+        StartTimeUtcFileTime: Id === 4321 ? '133700123456' : '133700123000',
       })),
       stopProcess: (pid: number) => {
         stopped.push(pid);
@@ -321,10 +1049,31 @@ describe('Smoke', () => {
       },
     };
 
+    let releaseAssociation!: () => void;
+    let associationReleased = false;
+    const associationBlocked = new Promise<void>((resolve) => {
+      releaseAssociation = () => {
+        associationReleased = true;
+        resolve();
+      };
+    });
+
     try {
       const bridge = new BridgeService();
       const tools = new RobloxStudioTools(bridge);
-      (tools as any).instanceManager = new StudioInstanceManager({ registryDir, processAdapter });
+      const manager = new StudioInstanceManager({ registryDir, processAdapter });
+      const pendingLaunches = manager.pendingLaunches.bind(manager);
+      let associationStarted = false;
+      manager.pendingLaunches = async () => {
+        associationStarted = true;
+        await associationBlocked;
+        return pendingLaunches();
+      };
+      const getManagedInstance = manager.get.bind(manager);
+      manager.get = async (instanceId: string) => associationReleased
+        ? getManagedInstance(instanceId)
+        : undefined;
+      (tools as any).instanceManager = manager;
 
       const launched = JSON.parse((await tools.manageInstance({
         action: 'launch',
@@ -336,10 +1085,23 @@ describe('Smoke', () => {
       expect(launched).toEqual(expect.objectContaining({
         launch_id: expect.any(String),
         pid: 4321,
+        process_started_at_file_time: '133700123456',
         state: 'launching',
         process_running: true,
         local_place_file: localPlaceFile,
         message: 'Studio launch requested.',
+      }));
+
+      const retainedStatus = JSON.parse((await tools.manageInstance({
+        action: 'status',
+        launch_id: launched.launch_id,
+      })).content[0].text);
+      expect(retainedStatus).toEqual(expect.objectContaining({
+        launch_id: launched.launch_id,
+        pid: 4321,
+        process_started_at_file_time: '133700123456',
+        state: 'launching',
+        process_running: true,
       }));
 
       bridge.registerInstance({
@@ -349,11 +1111,15 @@ describe('Smoke', () => {
         placeName: 'place.rbxl',
         dataModelName: 'place.rbxl',
       });
+      await Promise.resolve();
+      expect(associationStarted).toBe(true);
 
-      const status = JSON.parse((await tools.manageInstance({
+      const statusRequest = tools.manageInstance({
         action: 'status',
         instance_id: 'anon:async',
-      })).content[0].text);
+      });
+      releaseAssociation();
+      const status = JSON.parse((await statusRequest).content[0].text);
       expect(status).toEqual(expect.objectContaining({
         launch_id: launched.launch_id,
         instance_id: 'anon:async',
@@ -372,10 +1138,12 @@ describe('Smoke', () => {
         launch_id: launched.launch_id,
         instance_id: 'anon:async',
         state: 'exited',
+        close_status: 'closed',
         message: 'Studio instance closed.',
       }));
       expect(stopped).toEqual([4321]);
     } finally {
+      releaseAssociation();
       fs.rmSync(registryDir, { recursive: true, force: true });
     }
   });
@@ -438,7 +1206,17 @@ describe('Smoke', () => {
         launch_id: launched.launch_id,
         state: 'failed',
         process_running: false,
+        close_status: 'closed',
         message: 'Studio instance closed.',
+      }));
+      const closedAgain = JSON.parse((await tools.manageInstance({
+        action: 'close',
+        launch_id: launched.launch_id,
+      })).content[0].text);
+      expect(closedAgain).toEqual(expect.objectContaining({
+        launch_id: launched.launch_id,
+        close_status: 'already_closed',
+        message: 'Studio instance was already closed.',
       }));
       expect(stopped).toEqual([5432]);
     } finally {
@@ -468,7 +1246,12 @@ describe('Smoke', () => {
     try {
       const bridge = new BridgeService();
       const tools = new RobloxStudioTools(bridge);
-      (tools as any).instanceManager = new StudioInstanceManager({ registryDir, processAdapter });
+      (tools as any).instanceManager = new StudioInstanceManager({
+        registryDir,
+        processAdapter,
+        confirmedExitMisses: 1,
+        confirmedExitGraceMs: 0,
+      });
 
       const launched = JSON.parse((await tools.manageInstance({
         action: 'launch',
@@ -526,6 +1309,292 @@ describe('Smoke', () => {
     }
   });
 
+  test('process observation errors preserve durable ownership and expose unknown liveness', async () => {
+    const registryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'robloxstudio-mcp-registry-'));
+    const pid = 6611;
+    const startedAt = '100';
+    let spawned = false;
+    let observationFails = false;
+    let observedAt = 1000;
+    const processAdapter = {
+      currentBootId: () => 'boot-1',
+      resolveStudioExe: () => 'RobloxStudioBeta.exe',
+      spawnStudio: () => {
+        spawned = true;
+        return { pid, nativePid: pid, nativeStartedAt: startedAt, unref: () => {} };
+      },
+      observeStudioProcesses: () => observationFails
+        ? { status: 'error' as const, observedAt: ++observedAt, error: 'PowerShell unavailable' }
+        : {
+          status: 'ok' as const,
+          observedAt: ++observedAt,
+          processes: spawned ? [{
+            Id: pid,
+            Name: 'RobloxStudioBeta',
+            Path: 'RobloxStudioBeta.exe',
+            StartTimeUtcFileTime: startedAt,
+          }] : [],
+        },
+      stopProcess: () => { spawned = false; },
+    };
+
+    try {
+      const manager = new StudioInstanceManager({ registryDir, processAdapter });
+      const record = await manager.launch({ source: 'local_file', localPlaceFile: '/tmp/unknown.rbxl' });
+      await manager.attachInstanceId(record, 'anon:unknown');
+      observationFails = true;
+
+      await manager.refresh(record);
+      await manager.refresh(record);
+
+      expect(record).toEqual(expect.objectContaining({
+        instanceId: 'anon:unknown',
+        state: 'connected',
+        processObservationStatus: 'unknown',
+        lastProcessObservationError: 'PowerShell unavailable',
+        consecutiveConfirmedMisses: 0,
+      }));
+      expect(record.closedAt).toBeUndefined();
+      const persisted = JSON.parse(fs.readFileSync(path.join(registryDir, `${record.recordId}.json`), 'utf8'));
+      expect(persisted).toEqual(expect.objectContaining({
+        state: 'connected',
+        processObservationStatus: 'unknown',
+        lastProcessObservationError: 'PowerShell unavailable',
+      }));
+      expect(persisted.closedAt).toBeUndefined();
+    } finally {
+      fs.rmSync(registryDir, { recursive: true, force: true });
+    }
+  });
+
+  test('connected ownership survives one successful miss and closes only after confirmed absence', async () => {
+    const registryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'robloxstudio-mcp-registry-'));
+    const pid = 6612;
+    let spawned = false;
+    let observedAt = 1000;
+    const processAdapter = {
+      currentBootId: () => 'boot-1',
+      resolveStudioExe: () => 'RobloxStudioBeta.exe',
+      spawnStudio: () => {
+        spawned = true;
+        return { pid, nativePid: pid, unref: () => {} };
+      },
+      observeStudioProcesses: () => ({
+        status: 'ok' as const,
+        observedAt,
+        processes: spawned ? [{ Id: pid, Name: 'RobloxStudioBeta', Path: 'RobloxStudioBeta.exe' }] : [],
+      }),
+      stopProcess: () => { spawned = false; },
+    };
+
+    try {
+      const manager = new StudioInstanceManager({
+        registryDir,
+        processAdapter,
+        confirmedExitMisses: 2,
+        confirmedExitGraceMs: 5000,
+      });
+      const record = await manager.launch({ source: 'local_file', localPlaceFile: '/tmp/grace.rbxl' });
+      observedAt = 1500;
+      await manager.attachInstanceId(record, 'anon:grace');
+      spawned = false;
+      observedAt = 2000;
+
+      await manager.refresh(record);
+      expect(record.closedAt).toBeUndefined();
+      expect(record.consecutiveConfirmedMisses).toBe(1);
+
+      observedAt = 8000;
+      await manager.refresh(record);
+      expect(record).toEqual(expect.objectContaining({
+        state: 'exited',
+        consecutiveConfirmedMisses: 2,
+        failureReason: 'Studio process exited.',
+      }));
+      expect(record.closedAt).toEqual(expect.any(Number));
+
+      spawned = true;
+      observedAt = 9000;
+      await manager.attachInstanceId(record, 'anon:grace');
+      expect(record).toEqual(expect.objectContaining({
+        state: 'connected',
+        processObservationStatus: 'running',
+        consecutiveConfirmedMisses: 0,
+      }));
+      expect(record.closedAt).toBeUndefined();
+      expect(record.exitedAt).toBeUndefined();
+    } finally {
+      fs.rmSync(registryDir, { recursive: true, force: true });
+    }
+  });
+
+  test('status refreshes ten managed records from one process snapshot', async () => {
+    const registryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'robloxstudio-mcp-registry-'));
+    let nextPid = 6700;
+    let snapshotCalls = 0;
+    const live = new Map<number, string>();
+    const processAdapter = {
+      currentBootId: () => 'boot-1',
+      resolveStudioExe: () => 'RobloxStudioBeta.exe',
+      spawnStudio: () => {
+        const pid = ++nextPid;
+        const startedAt = String(pid * 100);
+        live.set(pid, startedAt);
+        return { pid, nativePid: pid, nativeStartedAt: startedAt, unref: () => {} };
+      },
+      observeStudioProcesses: () => {
+        snapshotCalls += 1;
+        return {
+          status: 'ok' as const,
+          observedAt: Date.now(),
+          processes: [...live].map(([Id, StartTimeUtcFileTime]) => ({
+            Id,
+            Name: 'RobloxStudioBeta',
+            Path: 'RobloxStudioBeta.exe',
+            StartTimeUtcFileTime,
+          })),
+        };
+      },
+      stopProcess: (pid: number) => { live.delete(pid); },
+    };
+
+    try {
+      const manager = new StudioInstanceManager({ registryDir, processAdapter });
+      for (let index = 0; index < 10; index += 1) {
+        await manager.launch({ source: 'local_file', localPlaceFile: `/tmp/snapshot-${index}.rbxl` });
+      }
+      snapshotCalls = 0;
+
+      expect(await manager.list()).toHaveLength(10);
+      expect(snapshotCalls).toBe(1);
+    } finally {
+      fs.rmSync(registryDir, { recursive: true, force: true });
+    }
+  });
+
+  test('health remains responsive while an asynchronous lifecycle adapter is pending', async () => {
+    const registryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'robloxstudio-mcp-registry-'));
+    let releaseSpawn!: () => void;
+    let signalSpawnStarted!: () => void;
+    const spawnStarted = new Promise<void>((resolve) => { signalSpawnStarted = resolve; });
+    const spawnBlocked = new Promise<void>((resolve) => { releaseSpawn = resolve; });
+    let spawned = false;
+    const processAdapter = {
+      currentBootId: () => 'boot-1',
+      resolveStudioExe: () => 'RobloxStudioBeta.exe',
+      observeStudioProcesses: () => ({
+        status: 'ok' as const,
+        observedAt: Date.now(),
+        processes: spawned ? [{ Id: 6801, Name: 'RobloxStudioBeta', Path: 'RobloxStudioBeta.exe' }] : [],
+      }),
+      spawnStudio: async () => {
+        signalSpawnStarted();
+        await spawnBlocked;
+        spawned = true;
+        return { pid: 6801, nativePid: 6801, unref: () => {} };
+      },
+      stopProcess: () => { spawned = false; },
+    };
+    const bridge = new BridgeService();
+    const tools = new RobloxStudioTools(bridge);
+    const manager = new StudioInstanceManager({ registryDir, processAdapter });
+    (tools as any).instanceManager = manager;
+    const app = createHttpServer(tools, bridge, new Set(['manage_instance']));
+    const server = await new Promise<import('http').Server>((resolve, reject) => {
+      const listening = app.listen(0, '127.0.0.1', () => resolve(listening));
+      listening.once('error', reject);
+    });
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Could not determine test server port.');
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    try {
+      const launch = fetch(`${baseUrl}/mcp/manage_instance`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          action: 'launch',
+          source: 'local_file',
+          local_place_file: '/tmp/health-pending.rbxl',
+          wait_for_connection: false,
+        }),
+      });
+      await spawnStarted;
+
+      const health = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(100) });
+      expect(health.status).toBe(200);
+
+      releaseSpawn();
+      expect((await launch).status).toBe(200);
+    } finally {
+      releaseSpawn();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      fs.rmSync(registryDir, { recursive: true, force: true });
+    }
+  });
+
+  test('health remains responsive while registry lock acquisition is pending', async () => {
+    const registryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'robloxstudio-mcp-registry-'));
+    fs.mkdirSync(path.join(registryDir, '.lock'));
+    const bridge = new BridgeService();
+    const tools = new RobloxStudioTools(bridge);
+    (tools as any).instanceManager = new StudioInstanceManager({
+      registryDir,
+      processAdapter: {
+        currentBootId: () => 'boot-1',
+        observeStudioProcesses: () => ({ status: 'ok', observedAt: Date.now(), processes: [] }),
+      },
+    });
+    const app = createHttpServer(tools, bridge, new Set(['manage_instance']));
+    const server = await new Promise<import('http').Server>((resolve, reject) => {
+      const listening = app.listen(0, '127.0.0.1', () => resolve(listening));
+      listening.once('error', reject);
+    });
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Could not determine test server port.');
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    try {
+      const status = fetch(`${baseUrl}/mcp/manage_instance`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'status' }),
+      });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+
+      const health = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(100) });
+      expect(health.status).toBe(200);
+
+      fs.rmSync(path.join(registryDir, '.lock'), { recursive: true, force: true });
+      expect((await status).status).toBe(200);
+    } finally {
+      fs.rmSync(path.join(registryDir, '.lock'), { recursive: true, force: true });
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      fs.rmSync(registryDir, { recursive: true, force: true });
+    }
+  });
+
+  test('managed instance registry reclaims a fresh lock owned by a dead process', async () => {
+    const registryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'robloxstudio-mcp-registry-'));
+    const lockDir = path.join(registryDir, '.lock');
+    fs.mkdirSync(lockDir);
+    fs.writeFileSync(path.join(lockDir, 'owner.json'), JSON.stringify({
+      pid: 2_147_483_647,
+      token: 'dead-owner',
+      createdAt: Date.now(),
+    }));
+
+    try {
+      const startedAt = Date.now();
+      await expect(new ManagedInstanceRegistry(registryDir).listOpen({
+        currentBootId: 'boot-1',
+      })).resolves.toEqual([]);
+      expect(Date.now() - startedAt).toBeLessThan(1000);
+    } finally {
+      fs.rmSync(registryDir, { recursive: true, force: true });
+    }
+  }, 10_000);
+
   test('managed close refuses a recycled native Studio pid with a different start time', async () => {
     const registryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'robloxstudio-mcp-registry-'));
     let processStartedAt = '100';
@@ -549,12 +1618,12 @@ describe('Smoke', () => {
       const record = await manager.launch({ source: 'local_file', localPlaceFile: '/tmp/recycled.rbxl' });
       processStartedAt = '200';
 
-      expect(manager.closeByLaunchId(record.recordId as string)).toEqual(expect.objectContaining({
+      expect(await manager.closeByLaunchId(record.recordId as string)).toEqual(expect.objectContaining({
         status: 'already_closed',
         launchId: record.recordId,
       }));
       expect(stopped).toEqual([]);
-      expect(manager.getByLaunchId(record.recordId as string)).toEqual(expect.objectContaining({
+      expect(await manager.getByLaunchId(record.recordId as string)).toEqual(expect.objectContaining({
         state: 'exited',
         failureReason: 'Studio process identity changed; the retained PID was not reused.',
       }));
@@ -597,6 +1666,7 @@ describe('Smoke', () => {
     const body = JSON.parse(result.content[0].text);
     expect(body).toEqual({
       instance_id: 'anon:external',
+      close_status: 'closed',
       message: 'Studio instance closed.',
     });
     expect(closeConnectedInstance).toHaveBeenCalledWith(expect.objectContaining({
@@ -641,7 +1711,7 @@ describe('Smoke', () => {
     try {
       const launcher = new StudioInstanceManager({ registryDir, processAdapter });
       const record = await launcher.launch({ source: 'baseplate', localPlaceFile: placeFile });
-      launcher.attachInstanceId(record, 'anon:shared-baseplate');
+      await launcher.attachInstanceId(record, 'anon:shared-baseplate');
 
       const bridge = new BridgeService();
       const tools = new RobloxStudioTools(bridge);
@@ -699,7 +1769,7 @@ describe('Smoke', () => {
     try {
       const launcher = new StudioInstanceManager({ registryDir, processAdapter: launchAdapter });
       const record = await launcher.launch({ source: 'baseplate', localPlaceFile: placeFile });
-      launcher.attachInstanceId(record, 'anon:previous-boot');
+      await launcher.attachInstanceId(record, 'anon:previous-boot');
 
       const bridge = new BridgeService();
       const tools = new RobloxStudioTools(bridge);
@@ -756,7 +1826,7 @@ describe('Smoke', () => {
     try {
       const launcher = new StudioInstanceManager({ registryDir, processAdapter });
       const record = await launcher.launch({ source: 'baseplate', localPlaceFile: placeFile });
-      launcher.attachInstanceId(record, 'anon:double-close');
+      await launcher.attachInstanceId(record, 'anon:double-close');
 
       const bridge = new BridgeService();
       const tools = new RobloxStudioTools(bridge);
@@ -765,6 +1835,7 @@ describe('Smoke', () => {
       const first = await tools.manageInstance({ action: 'close', instance_id: 'anon:double-close' });
       expect(JSON.parse(first.content[0].text)).toEqual(expect.objectContaining({
         instance_id: 'anon:double-close',
+        close_status: 'closed',
         message: 'Studio instance closed.',
         state: 'exited',
         process_running: false,
@@ -773,6 +1844,7 @@ describe('Smoke', () => {
       const second = await tools.manageInstance({ action: 'close', instance_id: 'anon:double-close' });
       expect(JSON.parse(second.content[0].text)).toEqual(expect.objectContaining({
         instance_id: 'anon:double-close',
+        close_status: 'already_closed',
         message: 'Studio instance was already closed.',
         state: 'exited',
         process_running: false,
@@ -892,12 +1964,17 @@ describe('Smoke', () => {
     try {
       const launcher = new StudioInstanceManager({ registryDir, processAdapter });
       const record = await launcher.launch({ source: 'baseplate', localPlaceFile: placeFile });
-      launcher.attachInstanceId(record, 'anon:stale-process');
+      await launcher.attachInstanceId(record, 'anon:stale-process');
       liveProcessIds.clear();
 
       const bridge = new BridgeService();
       const tools = new RobloxStudioTools(bridge);
-      (tools as any).instanceManager = new StudioInstanceManager({ registryDir, processAdapter });
+      (tools as any).instanceManager = new StudioInstanceManager({
+        registryDir,
+        processAdapter,
+        confirmedExitMisses: 1,
+        confirmedExitGraceMs: 0,
+      });
 
       const result = await tools.manageInstance({ action: 'status' });
       expect(JSON.parse(result.content[0].text)).toEqual({
@@ -1266,13 +2343,13 @@ describe('Smoke', () => {
         duration_ms: 250,
         focus: 'script',
         max_events: 10000,
-	        max_groups: 10,
-	        max_timers_per_group: 3,
-	        __mcp_include_raw_buffer: true,
-	        __mcp_include_comparison_index: true,
-	        __mcp_instance_id: 'place:test',
-	        __mcp_target_role: 'server',
-	      },
+        max_groups: 10,
+        max_timers_per_group: 3,
+        __mcp_include_raw_buffer: true,
+        __mcp_include_comparison_index: true,
+        __mcp_instance_id: 'place:test',
+        __mcp_target_role: 'server',
+      },
     });
     bridge.resolveRequest(pending!.requestId, {
       ok: true,
@@ -1295,67 +2372,67 @@ describe('Smoke', () => {
       top_groups: [{ group: 'Script', total_us: 300, exclusive_us: 100, count: 3 }],
       counts: { events_sampled: 0 },
       baseline_comparison: {
-	        baseline_label: 'empty_baseplate',
-	        current_label: 'game',
-	        basis: 'inclusive_us_per_second normalized by each capture analysis duration; deltas use current minus baseline.',
-	        coverage: { current: 'returned_rows', baseline: 'returned_rows' },
-	        duration_ms: { baseline: 250, current: 250 },
-	        groups: [{
-	          group: 'Script',
-	          matched_by: 'stable_label',
-	          match_confidence: 'medium',
-	          current_inclusive_us: 300,
-	          baseline_inclusive_us: 100,
-	          delta_inclusive_us: 200,
-	          current_inclusive_us_per_s: 1200,
-	          baseline_inclusive_us_per_s: 400,
-	          delta_inclusive_us_per_s: 800,
-	          current_exclusive_us: 100,
-	          baseline_exclusive_us: 40,
-	          delta_exclusive_us: 60,
-	          current_exclusive_us_per_s: 400,
-	          baseline_exclusive_us_per_s: 160,
-	          delta_exclusive_us_per_s: 240,
-	          current_count: 3,
-	          baseline_count: 2,
-	          delta_count: 1,
-	          current_count_per_s: 12,
-	          baseline_count_per_s: 8,
-	          delta_count_per_s: 4,
-	          delta_pct: 200,
-	        }],
-	        timers: [{
-	          group: 'Script',
-	          name: '$Script',
-	          matched_by: 'stable_label',
-	          match_confidence: 'medium',
-	          current_inclusive_us: 280,
-	          baseline_inclusive_us: 80,
-	          delta_inclusive_us: 200,
-	          current_inclusive_us_per_s: 1120,
-	          baseline_inclusive_us_per_s: 320,
-	          delta_inclusive_us_per_s: 800,
-	          current_exclusive_us: 90,
-	          baseline_exclusive_us: 30,
-	          delta_exclusive_us: 60,
-	          current_exclusive_us_per_s: 360,
-	          baseline_exclusive_us_per_s: 120,
-	          delta_exclusive_us_per_s: 240,
-	          current_count: 3,
-	          baseline_count: 2,
-	          delta_count: 1,
-	          current_count_per_s: 12,
-	          baseline_count_per_s: 8,
-	          delta_count_per_s: 4,
-	          delta_pct: 250,
-	        }],
-	        threads: [],
-	        call_edges: [],
-	      },
-	    });
+        baseline_label: 'empty_baseplate',
+        current_label: 'game',
+        basis: 'inclusive_us_per_second normalized by each capture analysis duration; deltas use current minus baseline.',
+        coverage: { current: 'returned_rows', baseline: 'returned_rows' },
+        duration_ms: { baseline: 250, current: 250 },
+        groups: [{
+          group: 'Script',
+          matched_by: 'stable_label',
+          match_confidence: 'medium',
+          current_inclusive_us: 300,
+          baseline_inclusive_us: 100,
+          delta_inclusive_us: 200,
+          current_inclusive_us_per_s: 1200,
+          baseline_inclusive_us_per_s: 400,
+          delta_inclusive_us_per_s: 800,
+          current_exclusive_us: 100,
+          baseline_exclusive_us: 40,
+          delta_exclusive_us: 60,
+          current_exclusive_us_per_s: 400,
+          baseline_exclusive_us_per_s: 160,
+          delta_exclusive_us_per_s: 240,
+          current_count: 3,
+          baseline_count: 2,
+          delta_count: 1,
+          current_count_per_s: 12,
+          baseline_count_per_s: 8,
+          delta_count_per_s: 4,
+          delta_pct: 200,
+        }],
+        timers: [{
+          group: 'Script',
+          name: '$Script',
+          matched_by: 'stable_label',
+          match_confidence: 'medium',
+          current_inclusive_us: 280,
+          baseline_inclusive_us: 80,
+          delta_inclusive_us: 200,
+          current_inclusive_us_per_s: 1120,
+          baseline_inclusive_us_per_s: 320,
+          delta_inclusive_us_per_s: 800,
+          current_exclusive_us: 90,
+          baseline_exclusive_us: 30,
+          delta_exclusive_us: 60,
+          current_exclusive_us_per_s: 360,
+          baseline_exclusive_us_per_s: 120,
+          delta_exclusive_us_per_s: 240,
+          current_count: 3,
+          baseline_count: 2,
+          delta_count: 1,
+          current_count_per_s: 12,
+          baseline_count_per_s: 8,
+          delta_count_per_s: 4,
+          delta_pct: 250,
+        }],
+        threads: [],
+        call_edges: [],
+      },
+    });
     expect(fs.readFileSync(outputPath, 'utf8')).toBe('micro');
-	    const summary = JSON.parse(fs.readFileSync(summaryOutputPath, 'utf8'));
-	    expect(summary.baseline_comparison.groups[0].delta_inclusive_us_per_s).toBe(800);
+    const summary = JSON.parse(fs.readFileSync(summaryOutputPath, 'utf8'));
+    expect(summary.baseline_comparison.groups[0].delta_inclusive_us_per_s).toBe(800);
     fs.rmSync(outputPath, { force: true });
     fs.rmSync(summaryOutputPath, { force: true });
   });
@@ -1466,6 +2543,31 @@ describe('Smoke', () => {
       if (prevGroupId === undefined) delete process.env.ROBLOX_CREATOR_GROUP_ID;
       else process.env.ROBLOX_CREATOR_GROUP_ID = prevGroupId;
     }
+  });
+
+  test('generate_model source image cookie upload uses the direct Image asset id', async () => {
+    const bridge = new BridgeService();
+    const tools = new RobloxStudioTools(bridge) as any;
+    tools.cookieClient = {
+      hasCookie: () => true,
+      uploadImage: jest.fn(async () => ({ assetId: 888 })),
+    };
+    tools.openCloudClient = { hasApiKey: () => false };
+
+    const imageId = await tools.uploadGenerateModelReferenceImage(
+      Buffer.from('not actually png'),
+      'place:test',
+    );
+
+    expect(imageId).toBe(888);
+    expect(tools.cookieClient.uploadImage).toHaveBeenCalledWith({
+      fileContent: expect.any(Buffer),
+      fileName: 'generate-model-reference.png',
+      displayName: 'Studio Assistant Source Image',
+      description: 'Studio Assistant Source Image',
+      userId: process.env.ROBLOX_CREATOR_USER_ID,
+      groupId: process.env.ROBLOX_CREATOR_GROUP_ID,
+    });
   });
 
   test('get_script_source shows plugin truncation range and note', async () => {

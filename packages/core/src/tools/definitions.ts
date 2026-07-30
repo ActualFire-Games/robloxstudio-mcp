@@ -978,14 +978,14 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'manage_instance',
     category: 'write',
-    description: 'Launch, close, inspect, and find revisions for Studio instances. Every launch returns launch_id, native pid, source, and lifecycle state; status and close accept launch_id before the plugin connects and instance_id after association. Use action="launch" with source="baseplate" for a blank place, or source="local_file" with local_place_file for a local place; neither uses place_id. Use action="list_place_versions" with place_id to retrieve version numbers through Open Cloud asset versions, then action="launch" with source="place_revision", place_id, and place_version to open an older revision. action="launch" source="published_place" opens the latest published place and is blocked if that place_id is already connected; source="place_revision" is allowed because Studio opens explicit past revisions as anonymous local copies. Requires ROBLOX_OPEN_CLOUD_API_KEY with asset:read for list_place_versions.',
+    description: 'Launch, authorize, complete, close, inspect, and find revisions for Studio instances. Every launch returns launch_id, native pid, source, and lifecycle state; status and close accept launch_id before the plugin connects and instance_id after association. Use action="launch" with source="baseplate" for a blank place, or source="local_file" with local_place_file for a local place; neither uses place_id. A process-identity launch requires action="authorize" after injection is prepared, followed by action="complete" only after the injected runtime is independently attested. Use action="list_place_versions" with place_id to retrieve version numbers through Open Cloud asset versions, then action="launch" with source="place_revision", place_id, and place_version to open an older revision. action="launch" source="published_place" opens the latest published place and is blocked if that place_id is already connected; source="place_revision" is allowed because Studio opens explicit past revisions as anonymous local copies. Requires ROBLOX_OPEN_CLOUD_API_KEY with asset:read for list_place_versions.',
     inputSchema: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
-          enum: ['launch', 'close', 'status', 'list_place_versions'],
-          description: 'Instance management action.'
+          enum: ['launch', 'authorize', 'complete', 'close', 'status', 'list_place_versions'],
+          description: 'Instance management action. authorize resumes a protocol-v3 launch after the caller has prepared process-scoped injection. complete releases broker process ownership after the caller independently attests that injection finished.'
         },
         source: {
           type: 'string',
@@ -1004,13 +1004,46 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           type: 'number',
           description: 'Required for source="place_revision". Use action="list_place_versions" to discover available version numbers.'
         },
+        require_process_identity: {
+          type: 'boolean',
+          description: 'For action="launch": require an exact native PID and process creation time, return launch_id immediately, and retain broker ownership of the native process until action="complete" succeeds. The process remains suspended until action="authorize" begins injection. If identity capture, authorization, or ownership completion fails, the broker stops the launched process.'
+        },
         wait_for_connection: {
           type: 'boolean',
-          description: 'For action="launch": wait until the MCP plugin connects and return instance_id (default true). false returns launch_id immediately and continues association/failure tracking asynchronously.'
+          description: 'For action="launch": wait until the MCP plugin connects and return instance_id (default true). false returns launch_id immediately and continues association/failure tracking asynchronously. Ignored when require_process_identity=true, which always returns the suspended launch immediately.'
         },
         timeout_ms: {
           type: 'number',
-          description: 'For action="launch": max milliseconds for plugin connection (default 120000). The deadline also applies asynchronously when wait_for_connection=false.'
+          description: 'For action="launch": max milliseconds for plugin connection (default 120000). The deadline also applies asynchronously when wait_for_connection=false. It does not apply when require_process_identity=true; that protocol uses the broker ownership-completion lease through action="complete".'
+        },
+        studio_executable: {
+          type: 'string',
+          description: 'For action="launch": exact Roblox Studio executable to launch instead of auto-discovering a version.'
+        },
+        process_environment: {
+          type: 'object',
+          description: 'For action="launch": process-scoped environment patch applied only while creating Studio. Values are never retained in the managed-instance registry.',
+          properties: {
+            set: {
+              type: 'object',
+              description: 'Environment variables to set for the Studio process.',
+              propertyNames: {
+                pattern: '^[A-Za-z_][A-Za-z0-9_]*$'
+              },
+              additionalProperties: {
+                type: 'string'
+              }
+            },
+            remove: {
+              type: 'array',
+              description: 'Environment variables to remove from the Studio process environment.',
+              items: {
+                type: 'string',
+                pattern: '^[A-Za-z_][A-Za-z0-9_]*$'
+              }
+            }
+          },
+          additionalProperties: false
         },
         max_page_size: {
           type: 'number',
@@ -1382,7 +1415,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'get_runtime_logs',
     category: 'read',
-    description: 'Read the in-memory log buffers captured by Studio plugin peers. Each buffer captures ~64 KB of recent LogService output; runtime peers seed from LogService:GetLogHistory() at plugin load so early startup logs emitted before the plugin finishes loading can still be returned, then continue capturing LogService.MessageOut entries. Oldest entries drop when over budget. Entries include capturedBy for the plugin buffer that observed the log. In ordinary Studio play/run sessions, LogService reflects logs across edit/server/client, so script-origin peer is not reliable and entries omit peer. In StudioTestService multiplayer sessions only, peer attribution is reliable and entries also include peer. target=all (default) merges buffers and dedups same-message-and-level entries captured within 2s across different buffers.',
+    description: 'Read the in-memory log buffers captured by Studio plugin peers. Each buffer captures ~64 KB of recent LogService output; runtime peers seed from LogService:GetLogHistory() at plugin load so early startup logs emitted before the plugin finishes loading can still be returned, then continue capturing LogService.MessageOut entries. Live structured LogService entries include their context dictionary as optional data; Roblox GetLogHistory does not expose context for entries seeded at plugin load. Oldest entries drop when over budget. Entries include capturedBy for the plugin buffer that observed the log. In ordinary Studio play/run sessions, LogService reflects logs across edit/server/client, so script-origin peer is not reliable and entries omit peer. In StudioTestService multiplayer sessions only, peer attribution is reliable and entries also include peer. target=all (default) merges buffers and dedups same-message-and-level entries captured within 2s across different buffers.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2040,31 +2073,34 @@ part(0,2,0,2,1,1,"b")`,
   {
     name: 'search_assets',
     category: 'read',
-    description: 'Search the Creator Store (Roblox marketplace) for assets by type and keywords. Requires ROBLOX_OPEN_CLOUD_API_KEY env var (no cookie auth for this endpoint).',
+    description: 'Search the public Creator Store without requiring Roblox credentials. Returns compact normalized rows with assetId, name, a normalized description excerpt, and audio duration in seconds when available. Searches include all creators by default; set robloxCreatedOnly to restrict results to assets created by Roblox. Image searches use Decals; Particle and VFX searches use effect-focused Models. Call get_asset_details only for a shortlisted asset that needs full catalog metadata, get_asset_thumbnail for an inline visual, and preview_asset before insertion. Every inserted asset is sanitized without regard to its creator.',
     inputSchema: {
       type: 'object',
       properties: {
         assetType: {
           type: 'string',
-          enum: ['Audio', 'Model', 'Decal', 'Plugin', 'MeshPart', 'Video', 'FontFamily'],
-          description: 'Type of asset to search for'
+          enum: ['Audio', 'Model', 'Decal', 'Image', 'Particle', 'VFX', 'Plugin', 'MeshPart', 'Video', 'FontFamily'],
+          description: 'Type of asset to search for. Image maps to Decal. Particle and VFX map to Creator Store Model searches.'
         },
         query: {
           type: 'string',
-          description: 'Search keywords'
+          description: 'Search keywords. For particles/VFX, useful terms include particle effect, VFX, explosion, smoke, aura, beam, trail, and impact effect. Particle/VFX searches append an effect-specific suffix when needed.'
         },
         maxResults: {
           type: 'number',
-          description: 'Max results to return (default: 25)'
+          minimum: 1,
+          maximum: 100,
+          description: 'Max results to return (default: 25, maximum: 100)'
         },
         sortBy: {
           type: 'string',
           enum: ['Relevance', 'Trending', 'Top', 'AudioDuration', 'CreateTime', 'UpdatedTime', 'Ratings'],
           description: 'Sort order (default: Relevance)'
         },
-        verifiedCreatorsOnly: {
+        robloxCreatedOnly: {
           type: 'boolean',
-          description: 'Only show assets from verified creators (default: false)'
+          default: false,
+          description: 'Only show assets created by the Roblox account (default: false). All creators are searched when false; insertion sanitizes every asset regardless of creator.'
         }
       },
       required: ['assetType']
@@ -2073,7 +2109,7 @@ part(0,2,0,2,1,1,"b")`,
   {
     name: 'get_asset_details',
     category: 'read',
-    description: 'Get detailed marketplace metadata for a specific asset. Uses ROBLOX_OPEN_CLOUD_API_KEY or falls back to ROBLOSECURITY cookie (own assets only).',
+    description: 'Get full public Creator Store metadata for one shortlisted asset without requiring Roblox credentials. Prefer search_assets for compact discovery.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2088,7 +2124,7 @@ part(0,2,0,2,1,1,"b")`,
   {
     name: 'get_asset_thumbnail',
     category: 'read',
-    description: 'Get the thumbnail image for an asset as base64 PNG, suitable for vision LLMs. Thumbnails API is public but asset validation uses ROBLOX_OPEN_CLOUD_API_KEY.',
+    description: 'Get the public thumbnail image for an asset as base64 PNG, suitable for vision LLMs. No Roblox credentials are required.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2108,7 +2144,7 @@ part(0,2,0,2,1,1,"b")`,
   {
     name: 'insert_asset',
     category: 'write',
-    description: 'Insert a Roblox asset into Studio by loading it via AssetService and parenting it to a target location. Optionally set position.',
+    description: 'Securely insert a Creator Store asset into Studio. Public third-party assets require "Allow Loading Third Party Assets" in Studio under Game Settings > Security. The loaded asset is forced to remain unparented while every descendant at unlimited depth is scanned. Every LuaSourceContainer (including Script, LocalScript, ModuleScript, and future subclasses) and every PackageLink is destroyed without inspecting or exposing source. A second unlimited-depth scan must find zero forbidden instances before any content is parented; otherwise the entire loaded asset is destroyed and nothing is inserted. Names, Unicode, nesting depth, creator verification, contents, and reputation never affect this policy. Legitimate visual objects such as ParticleEmitter, Beam, Trail, Attachment, Decal, Texture, meshes, lights, sounds, Fire, Smoke, and Sparkles are preserved. Optionally set position.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2215,7 +2251,7 @@ part(0,2,0,2,1,1,"b")`,
   {
     name: 'preview_asset',
     category: 'read',
-    description: 'Preview a Roblox asset without permanently inserting it. Loads the asset, builds a hierarchy tree with properties and summary stats, then destroys it. Useful for inspecting asset contents before insertion.',
+    description: 'Preview a Creator Store asset without inserting it. Public third-party assets require "Allow Loading Third Party Assets" in Studio security settings. The asset stays unparented, receives an unlimited-depth security/capability scan, and is destroyed. Output is compact: normalized capabilities and sound references, explicit script/PackageLink counts, and a hierarchy capped at 100 display nodes. Detailed instance properties are opt-in. Direct Creator Store Audio IDs and accessible nested sounds return temporary inline audio by default. Imported script source is never read or returned.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2225,11 +2261,25 @@ part(0,2,0,2,1,1,"b")`,
         },
         includeProperties: {
           type: 'boolean',
-          description: 'Include detailed properties for each instance (default: true)'
+          default: false,
+          description: 'Include detailed properties for displayed hierarchy nodes (default: false).'
         },
         maxDepth: {
           type: 'number',
-          description: 'Max hierarchy traversal depth (default: 10)'
+          default: 4,
+          description: 'Maximum display-tree depth (default: 4). The display is also capped at 100 nodes; the security scan always traverses every descendant.'
+        },
+        includeAudio: {
+          type: 'boolean',
+          default: true,
+          description: 'Return temporary inline MCP audio for a direct Creator Store Audio asset and accessible Sound or AudioPlayer references (default: true). Set false to return metadata without downloading audio. Downloads require ROBLOX_OPEN_CLOUD_API_KEY with asset:read permission and are never persisted to disk.'
+        },
+        maxAudioPreviews: {
+          type: 'number',
+          minimum: 1,
+          maximum: 5,
+          default: 3,
+          description: 'Maximum unique sound assets to return as inline audio (default: 3, maximum: 5). Each file and the combined response are subject to fixed byte limits.'
         },
         instance_id: {
           type: 'string',
@@ -2242,7 +2292,7 @@ part(0,2,0,2,1,1,"b")`,
   {
     name: 'upload_asset',
     category: 'write',
-    description: 'Upload any supported asset type to Roblox: Audio (mp3/ogg/wav/flac), Decal (png/jpg/bmp/tga), Model (fbx/gltf/glb/rbxm/rbxmx), Animation (rbxm/rbxmx), or Video (mp4/mov). Decal supports ROBLOSECURITY cookie auth or ROBLOX_OPEN_CLOUD_API_KEY. All other types require Open Cloud API key with asset:write scope + creator ID. Audio: max 7 min, 100 uploads/month (ID-verified). Video: max 5 min, requires 13+ ID-verified.',
+    description: 'Upload any supported asset type to Roblox: Audio (mp3/ogg/wav/flac), Decal (png/jpg/bmp/tga), Model (fbx/gltf/glb/rbxm/rbxmx), Animation (rbxm/rbxmx), or Video (mp4/mov). Decal supports ROBLOSECURITY cookie auth through the Asset Manager user-auth API and returns the direct Image asset ID, or ROBLOX_OPEN_CLOUD_API_KEY. All other types require Open Cloud API key with asset:write scope + creator ID. Audio: max 7 min, 100 uploads/month (ID-verified). Video: max 5 min, requires 13+ ID-verified.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2676,7 +2726,7 @@ part(0,2,0,2,1,1,"b")`,
   {
     name: 'get_roblox_docs',
     category: 'read',
-    description: 'Fetch official Roblox engine API documentation as markdown from create.roblox.com. Call this BEFORE writing or editing code that uses an engine class, enum, datatype, or Luau library you are not fully certain about (e.g. ProximityPrompt, Enum.KeyCode, CFrame, TweenService) — the page includes the description, properties, methods, events, and code samples. Results are cached, so repeat lookups are cheap. Very large pages are truncated with a section index; pass section (e.g. "Properties", "Methods", "Events") to read one section in full.',
+    description: 'Fetch official Roblox engine API documentation as markdown from create.roblox.com. Call this BEFORE writing or editing code that uses an engine class, enum, datatype, or Luau library you are not fully certain about (e.g. ProximityPrompt, Enum.KeyCode, CFrame, TweenService) — the page includes the description, properties, methods, events, and code samples. Unresolved names return ranked recommendations from the official engine index, including pages in other doc categories. Results are cached, so repeat lookups are cheap. Very large pages are truncated with a section index; pass section (e.g. "Properties", "Methods", "Events") to read one section in full.',
     inputSchema: {
       type: 'object',
       properties: {
