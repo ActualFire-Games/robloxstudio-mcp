@@ -393,8 +393,14 @@ function registerProxy(player: Player, rf: RemoteFunction) {
 		pluginVariant: State.PLUGIN_VARIANT,
 	});
 	if (!ok || !res || !res.Success) {
+		// Warn once per player until the registration recovers, matching the
+		// /ready throttle in Communication - the caller retries on every
+		// PlayerAdded and the MCP server may be down for a whole session.
+		const alreadyWarned = proxyRegisterFailuresByPlayer.has(player);
 		proxyRegisterFailuresByPlayer.add(player);
-		warn(`[robloxstudio-mcp] proxy register failed for ${player.Name}: ${formatPostJsonFailure("/ready", ok, res)}`);
+		if (!alreadyWarned) {
+			warn(`[robloxstudio-mcp] proxy register failed for ${player.Name}: ${formatPostJsonFailure("/ready", ok, res)}`);
+		}
 		return;
 	}
 	const body = HttpService.JSONDecode(res.Body) as ReadyResponseBody;

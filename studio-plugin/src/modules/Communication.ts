@@ -277,9 +277,15 @@ function sendReady(conn: Connection): void {
 		const readyUrl = `${conn.serverUrl}/ready`;
 		const readyRole = detectRole();
 		const readyLogKey = `${conn.serverUrl}|${instanceId}|${readyRole}`;
+		// Warn once per (url, instance, role) until it recovers. Retries are
+		// continuous while the MCP server is down, and repeating an identical
+		// warning every attempt buries the user's own output.
+		const alreadyWarned = readyFailureLogKeys.has(readyLogKey);
 		if (!readyOk) {
 			readyFailureLogKeys.add(readyLogKey);
-			warn(`[robloxstudio-mcp] /ready failed for ${instanceId}/${readyRole}: ${HttpDiagnostics.formatRequestFailure(readyUrl, readyOk, readyResult)}`);
+			if (!alreadyWarned) {
+				warn(`[robloxstudio-mcp] /ready failed for ${instanceId}/${readyRole}: ${HttpDiagnostics.formatRequestFailure(readyUrl, readyOk, readyResult)}`);
+			}
 			return;
 		}
 		if (!readyResult.Success) {
@@ -294,10 +300,14 @@ function sendReady(conn: Connection): void {
 				ui.statusLabel.TextColor3 = Color3.fromRGB(239, 68, 68);
 				ui.detailStatusLabel.Text = reason;
 				ui.detailStatusLabel.TextColor3 = Color3.fromRGB(239, 68, 68);
-				warn(`[robloxstudio-mcp] /ready rejected for ${instanceId}/${readyRole}: ${reason}`);
+				if (!alreadyWarned) {
+					warn(`[robloxstudio-mcp] /ready rejected for ${instanceId}/${readyRole}: ${reason}`);
+				}
 				return;
 			}
-			warn(`[robloxstudio-mcp] /ready rejected for ${instanceId}/${readyRole}: ${reason}`);
+			if (!alreadyWarned) {
+				warn(`[robloxstudio-mcp] /ready rejected for ${instanceId}/${readyRole}: ${reason}`);
+			}
 			return;
 		}
 		const [parseOk, readyData] = pcall(
