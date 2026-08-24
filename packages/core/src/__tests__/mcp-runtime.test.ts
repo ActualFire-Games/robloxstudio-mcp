@@ -92,14 +92,15 @@ describe('MCP v2 tool runtime', () => {
     const serialized = JSON.stringify(catalog);
     const inspectorCatalog = getReadOnlyTools().map(publicToolDefinition);
 
-    // This fork keeps the tools upstream 3.0 dropped, so the catalog is larger than
-    // upstream's 47-tool budget. These ceilings still catch unintended growth.
-    expect(catalog).toHaveLength(84);
-    expect(serialized.length).toBeLessThanOrEqual(125_000);
+    // This fork keeps tools upstream 3.0 dropped, so its catalog ceiling is higher than
+    // upstream's 43,000, but the per-description budgets below are upstream's exactly.
+    expect(catalog).toHaveLength(73);
+    expect(serialized.length).toBeLessThanOrEqual(72_000);
+    expect(catalog.every((tool) => tool.description.length <= 120)).toBe(true);
     // get_roblox_docs returns Markdown, so it is the one tool without a JSON output schema.
     expect(catalog.filter((tool) => tool.outputSchema)).toHaveLength(catalog.length - 1);
     expect(byName.get('get_roblox_docs')?.outputSchema).toBeUndefined();
-    expect(JSON.stringify(inspectorCatalog).length).toBeLessThanOrEqual(80_000);
+    expect(JSON.stringify(inspectorCatalog).length).toBeLessThanOrEqual(33_000);
     expect(byName.get('selection')?.outputSchema).toEqual({
       type: 'object',
       additionalProperties: true,
@@ -174,11 +175,19 @@ describe('MCP v2 tool runtime', () => {
     ];
 
     for (const tool of catalog) {
-      // Upstream's one-sentence "Use ...." convention and its 64-char argument budget belong
-      // to the description-slimming work this fork has not adopted; structure still holds.
+      // Upstream's advertisement contract, adopted in full: one "Use ...." sentence that
+      // never leaks another tool's name, so cross-tool guidance lives in the server
+      // instructions and the tool guide instead of in every description.
+      expect(tool.description).toMatch(/^Use .+\.$/);
+      expect(tool.description.match(/\.(?:\s|$)/g)).toHaveLength(1);
+      expect(tool.description.length).toBeLessThanOrEqual(120);
       expect(tool.description).not.toContain('\n');
       expect(tool.description).not.toContain('—');
       expect(Object.keys(tool.annotations).sort()).toEqual(annotationKeys);
+
+      for (const otherName of toolNames) {
+        if (otherName !== tool.name) expect(tool.description).not.toContain(otherName);
+      }
 
 
       for (const property of collectPropertySchemas(tool.inputSchema)) {
@@ -186,8 +195,12 @@ describe('MCP v2 tool runtime', () => {
         if (typeof description !== 'string' || !description.trim()) {
           throw new Error(`${tool.name} ${property.path} needs an argument description.`);
         }
+        expect(description.length).toBeLessThanOrEqual(64);
         expect(description).not.toContain('\n');
         expect(description).not.toContain('—');
+        for (const otherName of toolNames) {
+          if (otherName !== tool.name) expect(description).not.toContain(otherName);
+        }
       }
     }
   });

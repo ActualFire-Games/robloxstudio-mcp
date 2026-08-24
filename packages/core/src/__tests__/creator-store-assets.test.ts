@@ -348,7 +348,7 @@ describe('Creator Store asset search', () => {
       'Particle',
       'VFX',
     ]));
-    expect(searchProps.assetType.description).toContain('Image maps to Decal');
+    expect(searchProps.assetType.description).toContain('Image searches Decals');
     expect(searchProps).toHaveProperty('robloxCreatedOnly');
     expect(searchProps.robloxCreatedOnly).toMatchObject({ type: 'boolean', default: false });
     expect(searchProps).not.toHaveProperty('verifiedCreatorsOnly');
@@ -370,11 +370,12 @@ describe('Creator Store asset search', () => {
       minimum: 1,
       maximum: 5,
     });
-    // Upstream's "Use ..." one-liner convention belongs to the description-slimming work
-    // this fork has not adopted; assert the safety contract these descriptions must state.
-    expect(search?.description).toContain('sanitized');
-    expect(preview?.description).toContain('security/capability scan');
-    expect(insert?.description).toContain('PackageLink is destroyed');
+    // Descriptions are now budgeted "Use ..." one-liners, so the sanitization contract these
+    // tools must honour is asserted where it now lives: the on-demand tool guide.
+    expect(TOOL_GUIDE_MARKDOWN).toContain('every inserted asset is sanitized regardless of creator');
+    expect(TOOL_GUIDE_MARKDOWN).toContain('security and capability scan');
+    expect(insert?.description).toContain('vetted');
+    expect(TOOL_GUIDE_MARKDOWN).toContain('insert_asset is sanitizing by design');
     expect(TOOL_GUIDE_MARKDOWN).toContain('scans the complete hierarchy without returning script source');
     expect(TOOL_GUIDE_MARKDOWN).toContain('removes every LuaSourceContainer and PackageLink');
     expect(TOOL_GUIDE_MARKDOWN).toContain('then scans again before insertion');

@@ -77,7 +77,7 @@ describe('Tool schema compatibility', () => {
     expect(tool).toBeDefined();
     expect(tool!.category).toBe('read');
     expect(getReadOnlyTools()).toContain(tool);
-    expect(tool!.description).toContain('Get, replace, or frame the Studio selection');
+    expect(tool!.description).toContain('read or replace the Studio selection');
 
     const schema = tool!.inputSchema as {
       properties?: Record<string, {
@@ -96,10 +96,11 @@ describe('Tool schema compatibility', () => {
     expect(schema.required).toEqual(['action']);
     expect(props.action.enum).toEqual(['get', 'set', 'view']);
     expect(props.mode).toMatchObject({ enum: ['set', 'add', 'remove'], default: 'set' });
-    expect(props.action.description).toContain('view');
+    expect(props.action.description).toContain('frame');
     expect(props.paths).toMatchObject({ items: { minLength: 1 } });
     expect(props.paths.description).toContain('empty array clears');
-    expect(props.mode.description).toContain('replace');
+    // What each mode value does now lives in the on-demand guide, not the argument description.
+    expect(TOOL_GUIDE_MARKDOWN).toContain('set replaces the selection, add extends it, remove deselects');
     expect(props.path).toMatchObject({ minLength: 1 });
     expect(props.path.description).toContain('BasePart or Model');
     expect(props.from.description).toContain('azimuth');
@@ -122,8 +123,6 @@ describe('Tool schema compatibility', () => {
       expect(TOOL_DEFINITIONS.some(candidate => candidate.name === absent)).toBe(false);
       expect(TOOL_HANDLERS[absent]).toBeUndefined();
     }
-    // This fork keeps the standalone get_selection reader next to the consolidated tool.
-    expect(TOOL_HANDLERS.get_selection).toBeDefined();
     expect(TOOL_HANDLERS.selection).toBeDefined();
   });
 
@@ -133,7 +132,9 @@ describe('Tool schema compatibility', () => {
 
     expect(props.usePattern).toMatchObject({ type: 'boolean' });
     expect(props.isRegex).toBeUndefined();
-    expect(props.caseSensitive.description).toContain('always case-sensitive');
+    expect(props.caseSensitive).toMatchObject({ type: 'boolean' });
+    // Pattern mode's case-sensitivity contract moved from the argument description to the guide.
+    expect(TOOL_GUIDE_MARKDOWN).toContain('always case-sensitive');
   });
 
   test('get_script_source exposes only line_range for range selection', () => {
@@ -191,11 +192,6 @@ describe('Tool schema compatibility', () => {
     'manage_instance',
     'get_roblox_docs',
     'get_roblox_skills',
-    // Build-library tools operate on the local build store, not a Studio session.
-    'create_build',
-    'generate_build',
-    'list_library',
-    'get_build',
   ]);
 
   function toolHandlerBody(toolName: string): string {
@@ -305,13 +301,6 @@ describe('Tool schema compatibility', () => {
       add_tag: 'addTag',
       remove_tag: 'removeTag',
       get_tagged: 'getTagged',
-      get_selection: 'getSelection',
-      undo: 'undo',
-      redo: 'redo',
-      export_build: 'exportBuild',
-      import_build: 'importBuild',
-      import_scene: 'importScene',
-      search_materials: 'searchMaterials',
       start_playtest: 'startPlaytest',
       stop_playtest: 'stopPlaytest',
       multiplayer_test_start: 'multiplayerTestStart',
@@ -409,7 +398,9 @@ describe('Tool schema compatibility', () => {
     });
     expect(props.universe_id).toBeUndefined();
     expect(schema.required).toEqual(['action']);
-    expect((props.place_version as { description?: string }).description).toContain('place_revision');
+    expect((props.place_version as { description?: string }).description).toContain('revision');
+    // Which source place_version pairs with is a guide fact now, not an argument description one.
+    expect(TOOL_GUIDE_MARKDOWN).toContain('source="place_revision" (with place_id and place_version)');
     expect(TOOL_GUIDE_MARKDOWN).toContain('manage_instance can launch, inspect, and close Studio or list published place revisions');
     expect(TOOL_GUIDE_MARKDOWN).toContain('must be authorized and completed explicitly');
   });
@@ -433,9 +424,11 @@ describe('Tool schema compatibility', () => {
     ].sort());
     expect((props.action as { enum?: string[] }).enum).toEqual(['set', 'remove', 'clear', 'list']);
     expect(schema.required).toEqual(['action']);
-    expect((props.action as { description?: string }).description).toContain('clear removes MCP-managed breakpoints');
-    expect((props.clear_all as { description?: string }).description).toContain('user-created breakpoints');
-    expect((props.continue_execution as { description?: string }).description).toContain('Enum.DebuggerResumeType.Resume');
+    expect((props.action as { description?: string }).description).toContain('set and remove need script_path and line');
+    expect((props.clear_all as { description?: string }).description).toContain('user-made stops');
+    expect((props.continue_execution as { description?: string }).description).toContain('Log without pausing');
+    // The resume-handler footgun that makes continue_execution=false dangerous is a guide fact now.
+    expect(TOOL_GUIDE_MARKDOWN).toContain('Enum.DebuggerResumeType.Resume');
     expect(TOOL_GUIDE_MARKDOWN).toContain('OnStopped resume handler');
     expect(TOOL_GUIDE_MARKDOWN).toContain('clear removes only MCP-created breakpoints');
   });
@@ -474,7 +467,7 @@ describe('Tool schema compatibility', () => {
     expect((props.min_total_us as { default?: number; minimum?: number }).default).toBe(0);
     expect((props.min_total_us as { default?: number; minimum?: number }).minimum).toBe(0);
     expect((props.min_total_us as { description?: string }).description).toContain('microseconds');
-    expect((props.output_path as { description?: string }).description).toContain('raw Script Profiler JSON');
+    expect((props.output_path as { description?: string }).description).toContain('raw profiler JSON');
   });
 
   test('capture_micro_profiler schema exposes focused engine profiler primitive', () => {
@@ -539,11 +532,15 @@ describe('Tool schema compatibility', () => {
     expect((props.max_events as { default?: number; minimum?: number; maximum?: number }).default).toBe(250000);
     expect((props.max_events as { default?: number; minimum?: number; maximum?: number }).minimum).toBe(10000);
     expect((props.max_events as { default?: number; minimum?: number; maximum?: number }).maximum).toBe(1000000);
-    expect((props.output_path as { description?: string }).description).toContain('raw MicroProfiler snapshot bytes');
-    expect((props.summary_output_path as { description?: string }).description).toContain('empty-baseplate');
-    expect((props.baseline_path as { description?: string }).description).toContain('current minus baseline');
-    expect(tool!.description).toContain('frame_breakdown');
-    expect(tool!.description).toContain('capture_id');
+    expect((props.output_path as { description?: string }).description).toContain('raw snapshot bytes');
+    expect((props.summary_output_path as { description?: string }).description).toContain('untrimmed summary');
+    // Baseline capture advice and delta direction moved out of the argument descriptions.
+    expect(TOOL_GUIDE_MARKDOWN).toContain('empty baseplate');
+    expect((props.baseline_path as { description?: string }).description).toContain('summary JSON to diff against');
+    expect(TOOL_GUIDE_MARKDOWN).toContain('current minus baseline');
+    expect(tool!.description).toContain('frame time');
+    expect(TOOL_GUIDE_MARKDOWN).toContain('frame_breakdown gives per-frame top timers');
+    expect(TOOL_GUIDE_MARKDOWN).toContain('returns a capture_id immediately');
     expect((props.action as { enum?: string[]; default?: string }).enum).toEqual(['capture', 'arm', 'collect', 'cancel', 'analyze']);
     expect((props.action as { enum?: string[]; default?: string }).default).toBe('capture');
     expect((props.capture_id as { type?: string }).type).toBe('string');
@@ -569,7 +566,9 @@ describe('Tool schema compatibility', () => {
     expect((props.post_trigger_frames as { default?: number; minimum?: number; maximum?: number }).default).toBe(30);
     expect((props.post_trigger_frames as { default?: number; minimum?: number; maximum?: number }).minimum).toBe(0);
     expect((props.post_trigger_frames as { default?: number; minimum?: number; maximum?: number }).maximum).toBe(200);
-    expect((props.post_trigger_frames as { description?: string }).description).toContain('240');
+    expect((props.post_trigger_frames as { description?: string }).description).toContain('after the trigger frame');
+    // The 240-frame ring ceiling on frames_before + post_trigger_frames is a guide fact now.
+    expect(TOOL_GUIDE_MARKDOWN).toContain('must stay at or below 240');
     expect((props.max_frame_breakdowns as { default?: number; minimum?: number; maximum?: number }).default).toBe(3);
     expect((props.max_frame_breakdowns as { default?: number; minimum?: number; maximum?: number }).minimum).toBe(0);
     expect((props.max_frame_breakdowns as { default?: number; minimum?: number; maximum?: number }).maximum).toBe(10);

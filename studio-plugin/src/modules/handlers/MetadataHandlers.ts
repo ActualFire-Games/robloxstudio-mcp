@@ -3,7 +3,6 @@ import Utils from "../Utils";
 import Recording from "../Recording";
 import LuauExec from "../LuauExec";
 
-const ChangeHistoryService = game.GetService("ChangeHistoryService");
 const Selection = game.GetService("Selection");
 
 const { getInstancePath, getInstanceByPath, serializeValue, maybeDecodeJsonTable } = Utils;
@@ -461,32 +460,6 @@ function executeLuau(requestData: Record<string, unknown>) {
 	return LuauExec.execute(code);
 }
 
-function undo(_requestData: Record<string, unknown>) {
-	const [success, result] = pcall(() => {
-		ChangeHistoryService.Undo();
-		return {
-			success: true,
-			message: "Undo executed successfully",
-		};
-	});
-
-	if (success) return result;
-	return { error: `Failed to undo: ${result}` };
-}
-
-function redo(_requestData: Record<string, unknown>) {
-	const [success, result] = pcall(() => {
-		ChangeHistoryService.Redo();
-		return {
-			success: true,
-			message: "Redo executed successfully",
-		};
-	});
-
-	if (success) return result;
-	return { error: `Failed to redo: ${result}` };
-}
-
 function bulkSetAttributes(requestData: Record<string, unknown>) {
 	const instancePath = requestData.instancePath as string;
 	const attributes = requestData.attributes as Record<string, unknown>;
@@ -541,7 +514,5 @@ export = {
 	setSelection,
 	focusViewport,
 	executeLuau,
-	undo,
-	redo,
 	bulkSetAttributes,
 };

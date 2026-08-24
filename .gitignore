@@ -37,7 +37,6 @@ studio-plugin/.Carbon.rbxm.lock
 .agents
 
 # Development files (keep local only)
-CLAUDE.md
 MCP_Server_Plan.md
 test-*.js
 example-*.json

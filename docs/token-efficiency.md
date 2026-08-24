@@ -7,17 +7,44 @@ Version 3.0 treats the MCP wire surface as a budgeted public API.
 Upstream caps the serialized public catalog at 43,000 characters, tool
 descriptions at 120 characters, and argument descriptions at 64 characters.
 
-**This fork has not adopted those two description budgets yet.** It keeps the
-larger tool surface upstream 3.0 removed, and its descriptions still carry
-operational detail, so the regression test currently caps the catalog at 125,000
-characters and does not enforce per-description limits. Every argument still
-requires a description, and structured output schemas are still required for
-every tool except the Markdown-returning `get_roblox_docs`.
+This fork enforces the same two description budgets. It keeps a larger tool
+surface than upstream 3.0, so the catalog ceiling is higher: the regression test
+caps the serialized public catalog at 72,000 characters. Every argument still
+requires a description, and structured output schemas are required for every tool
+except the Markdown-returning `get_roblox_docs`.
 
-Adopting the description budgets (and moving the stripped detail into the
-`robloxstudio://tool-guides` resource) is the main remaining token win here:
-roughly 11,000 tokens, versus about 7,600 for dropping the extra tools. Change
-the budget only as an explicit API decision.
+### Where the budget is actually enforced
+
+`publicToolDefinition` in `packages/core/src/mcp-runtime.ts` passes every
+description through `concise()` before it reaches a client, clipping tool
+descriptions to 120 characters and argument descriptions to 64. That projection
+is what a client sees, so the wire format is inside budget whatever the source
+says.
+
+This matters when estimating savings. Measuring `definitions.ts` overstates the
+catalog badly, because the source text is truncated before it is advertised.
+Measure `TOOL_DEFINITIONS.map(publicToolDefinition)` instead.
+
+The reason to write descriptions that already fit is therefore correctness, not
+size. When source text overflows, `concise()` keeps only the first sentence and
+then clips mid-phrase with an ellipsis, so the client reads a fragment. Before
+this fork adopted the budget, 13 of 84 tool descriptions and 250 of 422 argument
+descriptions reached clients truncated that way, including the `instance_id`
+description repeated across most tools, whose clipped form lost the clause
+explaining when the argument is required.
+
+### Measured effect of adopting the budget
+
+| | tools | advertised catalog |
+| --- | --- | --- |
+| before | 84 | 75,019 chars (~20,275 tokens) |
+| after removing 11 tools | 73 | 66,592 chars (~17,998 tokens) |
+| after also rewriting descriptions | 73 | 68,136 chars (~18,415 tokens) |
+
+Removing tools is what saves tokens, about 2,300. Rewriting descriptions costs
+roughly 400 tokens back, because purpose-written text is often longer than the
+truncated fragment it replaces. Its payoff is that no description reaches a
+client truncated any more. Change the budget only as an explicit API decision.
 
 ## Advertisement contract
 

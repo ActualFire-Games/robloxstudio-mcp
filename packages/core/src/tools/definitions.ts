@@ -17,17 +17,17 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'get_file_tree',
     category: 'read',
-    description: 'Get instance hierarchy tree from Studio',
+    description: 'Use to dump the complete instance tree under a path when you need every descendant, not a bounded preview.',
     inputSchema: {
       type: 'object',
       properties: {
         path: {
           type: 'string',
-          description: 'Canonical DataModel path (default: game root), such as game.Workspace or game.ServerScriptService[".dir"]'
+          description: 'DataModel path to start from, defaults to the game root.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       }
     }
@@ -35,22 +35,22 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'search_files',
     category: 'read',
-    description: 'Search instances by name, class, or script content',
+    description: 'Use to locate instances anywhere in the place by name, by class name, or by text inside script source.',
     inputSchema: {
       type: 'object',
       properties: {
         query: {
           type: 'string',
-          description: 'Name, class, or code pattern'
+          description: 'Text to match, case insensitive and read as a Lua pattern.'
         },
         searchType: {
           type: 'string',
           enum: ['name', 'type', 'content'],
-          description: 'Search mode (default: name)'
+          description: 'Field to match; defaults to name, content scans script text.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['query']
@@ -61,13 +61,13 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'get_place_info',
     category: 'read',
-    description: 'Get place ID, name, and game settings',
+    description: 'Use to identify the connected place (published name, place and game IDs, job ID) before acting on it.',
     inputSchema: {
       type: 'object',
       properties: {
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       }
     }
@@ -75,17 +75,17 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'get_services',
     category: 'read',
-    description: 'Get available services and their children',
+    description: 'Use to list a Studio service and its immediate children while orienting yourself in an unfamiliar place.',
     inputSchema: {
       type: 'object',
       properties: {
         serviceName: {
           type: 'string',
-          description: 'Specific service name'
+          description: 'Single service to describe; omit to list all services.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       }
     }
@@ -93,26 +93,26 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'search_objects',
     category: 'read',
-    description: 'Find instances by name, class, or properties',
+    description: 'Use to find instances across the whole place by name, by class, or by the value of one named property.',
     inputSchema: {
       type: 'object',
       properties: {
         query: {
           type: 'string',
-          description: 'Search query'
+          description: 'Text to match, case insensitive and read as a Lua pattern.'
         },
         searchType: {
           type: 'string',
           enum: ['name', 'class', 'property'],
-          description: 'Search mode (default: name)'
+          description: 'Field to match; defaults to name, property needs propertyName.'
         },
         propertyName: {
           type: 'string',
-          description: 'Property name when searchType is "property"'
+          description: 'Property to read; used only when searching by property.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['query']
@@ -123,21 +123,21 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'get_instance_properties',
     category: 'read',
-    description: 'Get all properties of an instance',
+    description: 'Use to read one instance\'s common properties, script source, and child count in a single call.',
     inputSchema: {
       type: 'object',
       properties: {
         instancePath: {
           type: 'string',
-          description: 'Canonical DataModel path, such as game.Workspace.Part or game.ServerScriptService[".dir"].Main'
+          description: 'Full DataModel path of the instance to read.'
         },
         excludeSource: {
           type: 'boolean',
-          description: 'For scripts, return SourceLength/LineCount instead of full source (default: false)'
+          description: 'Skip script source, return only its length and line count.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['instancePath']
@@ -146,17 +146,17 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'get_instance_children',
     category: 'read',
-    description: 'Get children and their class types',
+    description: 'Use to list the direct children of one instance with their class names, without recursing any deeper.',
     inputSchema: {
       type: 'object',
       properties: {
         instancePath: {
           type: 'string',
-          description: 'Canonical DataModel path, such as game.Workspace.Part or game.ServerScriptService[".dir"].Main'
+          description: 'Full DataModel path of the parent to list.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['instancePath']
@@ -165,21 +165,21 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'search_by_property',
     category: 'read',
-    description: 'Find objects with specific property values',
+    description: 'Use to find every instance whose given property matches a value when you do not know where they live.',
     inputSchema: {
       type: 'object',
       properties: {
         propertyName: {
           type: 'string',
-          description: 'Property name'
+          description: 'Property to read on each instance, skipped where absent.'
         },
         propertyValue: {
           type: 'string',
-          description: 'Value to match'
+          description: 'Substring matched against the value, case insensitive.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['propertyName', 'propertyValue']
@@ -188,17 +188,17 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'get_class_info',
     category: 'read',
-    description: 'Get the full API of a Roblox class from the official version-matched API dump: properties, methods, events, and callbacks with types, exact signatures, security tags (PluginSecurity etc.), Yields/Deprecated/ReadOnly tags, superclass chain, and direct subclasses. Members inherited from ancestors are labeled with inheritedFrom. Falls back to live-instance probing if the dump is unavailable offline.',
+    description: 'Use to look up a Roblox class\'s exact properties, methods, events, and type signatures before writing code.',
     inputSchema: {
       type: 'object',
       properties: {
         className: {
           type: 'string',
-          description: 'Roblox class name'
+          description: 'Exact Roblox class name, case sensitive'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['className']
@@ -209,25 +209,25 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'get_project_structure',
     category: 'read',
-    description: 'Get full game hierarchy tree. Increase maxDepth (default 3) for deeper traversal.',
+    description: 'Use to survey the place hierarchy at a bounded depth, starting from a service overview when no path is given.',
     inputSchema: {
       type: 'object',
       properties: {
         path: {
           type: 'string',
-          description: 'Canonical DataModel path (default: workspace root)'
+          description: 'Where to start; omit for a services overview of the place.'
         },
         maxDepth: {
           type: 'number',
-          description: 'Max traversal depth (default: 3)'
+          description: 'Levels below the start path to expand, defaults to 3.'
         },
         scriptsOnly: {
           type: 'boolean',
-          description: 'Show only scripts (default: false)'
+          description: 'Keep only scripts, modules, and folders, defaults to false.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       }
     }
@@ -237,24 +237,24 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'set_property',
     category: 'write',
-    description: 'Set a property on an instance',
+    description: 'Use to change one property on one instance when you already know its path and the property name.',
     inputSchema: {
       type: 'object',
       properties: {
         instancePath: {
           type: 'string',
-          description: 'Canonical DataModel path'
+          description: 'Canonical path of the instance to change'
         },
         propertyName: {
           type: 'string',
-          description: 'Property name'
+          description: 'Exact property name, case sensitive'
         },
         propertyValue: {
-          description: 'Value to set (string, number, boolean, or object for Vector3/Color3/UDim2)'
+          description: 'New value; arrays or {X,Y,Z} objects become Vector3/Color3'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['instancePath', 'propertyName', 'propertyValue']
@@ -263,25 +263,25 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'mass_set_property',
     category: 'write',
-    description: 'Set a property on multiple instances',
+    description: 'Use to apply the same property value across many instances in one call instead of one call each.',
     inputSchema: {
       type: 'object',
       properties: {
         paths: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Canonical DataModel paths'
+          description: 'Canonical paths; a missing one fails alone, not the batch'
         },
         propertyName: {
           type: 'string',
-          description: 'Property name'
+          description: 'Exact property name, case sensitive'
         },
         propertyValue: {
-          description: 'Value to set (string, number, boolean, or object for Vector3/Color3/UDim2)'
+          description: 'One value for every path; arrays map to Vector3/Color3'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['paths', 'propertyName', 'propertyValue']
@@ -290,22 +290,22 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'mass_get_property',
     category: 'read',
-    description: 'Get a property from multiple instances',
+    description: 'Use to read one property across many instances at once when auditing or comparing them.',
     inputSchema: {
       type: 'object',
       properties: {
         paths: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Canonical DataModel paths'
+          description: 'Canonical paths; each reports its own success or error'
         },
         propertyName: {
           type: 'string',
-          description: 'Property name'
+          description: 'Exact property name, case sensitive'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['paths', 'propertyName']
@@ -314,21 +314,21 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'set_properties',
     category: 'write',
-    description: 'Set multiple properties on a single instance in one call.',
+    description: 'Use to configure several properties on a single instance in one call, typically right after creating it.',
     inputSchema: {
       type: 'object',
       properties: {
         instancePath: {
           type: 'string',
-          description: 'Canonical DataModel path'
+          description: 'Canonical path of the instance to change'
         },
         properties: {
           type: 'object',
-          description: 'Map of property name to value'
+          description: 'Name to value map; each applies alone, order not fixed'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['instancePath', 'properties']
@@ -339,29 +339,29 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'create_object',
     category: 'write',
-    description: 'Create a new instance. Optionally set properties on creation.',
+    description: 'Use to add one new instance under a chosen parent, optionally with its starting properties.',
     inputSchema: {
       type: 'object',
       properties: {
         className: {
           type: 'string',
-          description: 'Roblox class name'
+          description: 'Creatable Roblox class name, case sensitive'
         },
         parent: {
           type: 'string',
-          description: 'Canonical parent DataModel path'
+          description: 'Canonical path of the parent, which must already exist'
         },
         name: {
           type: 'string',
-          description: 'Optional name'
+          description: 'Name for the new instance, defaults to the class name'
         },
         properties: {
           type: 'object',
-          description: 'Properties to set on creation'
+          description: 'Applied before parenting; bad names fail silently'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['className', 'parent']
@@ -370,7 +370,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'mass_create_objects',
     category: 'write',
-    description: 'Create multiple instances. Each can have optional properties.',
+    description: 'Use to build a whole batch of instances in one call, such as parts, folders, or value objects.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -381,28 +381,28 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
             properties: {
               className: {
                 type: 'string',
-                description: 'Roblox class name'
+                description: 'Creatable Roblox class name, case sensitive'
               },
               parent: {
                 type: 'string',
-                description: 'Canonical parent DataModel path'
+                description: 'Canonical parent path, existing or made earlier in the array'
               },
               name: {
                 type: 'string',
-                description: 'Optional name'
+                description: 'Name for the new instance, defaults to the class name'
               },
               properties: {
                 type: 'object',
-                description: 'Properties to set on creation'
+                description: 'Applied before parenting; bad names fail silently'
               }
             },
             required: ['className', 'parent']
           },
-          description: 'Objects to create'
+          description: 'Created in array order, so later ones can nest in earlier'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['objects']
@@ -411,17 +411,17 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'delete_object',
     category: 'write',
-    description: 'Delete an instance',
+    description: 'Use to permanently remove an instance and everything under it from the place.',
     inputSchema: {
       type: 'object',
       properties: {
         instancePath: {
           type: 'string',
-          description: 'Canonical DataModel path'
+          description: 'Canonical path to destroy, descendants included'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['instancePath']
@@ -432,55 +432,55 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'smart_duplicate',
     category: 'write',
-    description: 'Duplicate with naming, positioning, and property variations',
+    description: 'Use to duplicate one instance N times with stepped names, offsets, and property variations.',
     inputSchema: {
       type: 'object',
       properties: {
         instancePath: {
           type: 'string',
-          description: 'Canonical DataModel path'
+          description: 'Canonical path of the source instance to copy.'
         },
         count: {
           type: 'number',
-          description: 'Number of duplicates'
+          description: 'How many copies to make, indexed 1 to count.'
         },
         options: {
           type: 'object',
-          description: 'Per-duplicate naming and transform offsets applied cumulatively.',
+          description: 'Naming and transform variations applied per copy.',
           properties: {
             namePattern: {
               type: 'string',
-              description: 'Name pattern ({n} placeholder)'
+              description: 'Name template, {n} becomes the 1-based copy index.'
             },
             positionOffset: {
               type: 'array',
               items: { type: 'number' },
-              description: 'X, Y, Z offset per duplicate'
+              description: 'Studs added per copy, multiplied by the copy index.'
             },
             rotationOffset: {
               type: 'array',
               items: { type: 'number' },
-              description: 'X, Y, Z rotation offset'
+              description: 'Degrees added per copy, multiplied by the copy index.'
             },
             scaleOffset: {
               type: 'array',
               items: { type: 'number' },
-              description: 'X, Y, Z scale multiplier'
+              description: 'Size multipliers compounded, raised to the copy index.'
             },
             propertyVariations: {
               type: 'object',
-              description: 'Property name to array of values'
+              description: 'Property name to value list, cycled across copies.'
             },
             targetParents: {
               type: 'array',
               items: { type: 'string' },
-              description: 'Different parent per duplicate'
+              description: 'Parent path per copy, index 1 is the first copy.'
             }
           }
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['instancePath', 'count']
@@ -489,7 +489,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'mass_duplicate',
     category: 'write',
-    description: 'Batch smart_duplicate operations',
+    description: 'Use to run several independent duplication jobs on different sources in one call.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -500,54 +500,54 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
             properties: {
               instancePath: {
                 type: 'string',
-                description: 'Canonical DataModel path'
+                description: 'Canonical path of the source instance to copy.'
               },
               count: {
                 type: 'number',
-                description: 'Number of duplicates'
+                description: 'How many copies to make, indexed 1 to count.'
               },
               options: {
                 type: 'object',
-                description: 'Per-duplicate naming and transform offsets applied cumulatively.',
+                description: 'Naming and transform variations applied per copy.',
                 properties: {
                   namePattern: {
                     type: 'string',
-                    description: 'Name pattern ({n} placeholder)'
+                    description: 'Name template, {n} becomes the 1-based copy index.'
                   },
                   positionOffset: {
                     type: 'array',
                     items: { type: 'number' },
-                    description: 'X, Y, Z offset per duplicate'
+                    description: 'Studs added per copy, multiplied by the copy index.'
                   },
                   rotationOffset: {
                     type: 'array',
                     items: { type: 'number' },
-                    description: 'X, Y, Z rotation offset'
+                    description: 'Degrees added per copy, multiplied by the copy index.'
                   },
                   scaleOffset: {
                     type: 'array',
                     items: { type: 'number' },
-                    description: 'X, Y, Z scale multiplier'
+                    description: 'Size multipliers compounded, raised to the copy index.'
                   },
                   propertyVariations: {
                     type: 'object',
-                    description: 'Property name to array of values'
+                    description: 'Property name to value list, cycled across copies.'
                   },
                   targetParents: {
                     type: 'array',
                     items: { type: 'string' },
-                    description: 'Different parent per duplicate'
+                    description: 'Parent path per copy, index 1 is the first copy.'
                   }
                 }
               }
             },
             required: ['instancePath', 'count']
           },
-          description: 'Duplication operations'
+          description: 'One duplication job per source instance.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['duplications']
@@ -559,21 +559,21 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'get_script_source',
     category: 'read',
-    description: 'Get script source. Returns "source" and "numberedSource" (line-numbered). Pass line_range for large scripts; without a range, large scripts are truncated (see the "truncated" flag and "note") to avoid flooding the context.',
+    description: 'Use to read a script\'s source with line numbers before editing it.',
     inputSchema: {
       type: 'object',
       properties: {
         instancePath: {
           type: 'string',
-          description: 'Canonical path to a LuaSourceContainer'
+          description: 'Canonical path to the script instance to read'
         },
         line_range: {
           type: 'string',
-          description: 'Line range to return: "start-end" (e.g. "100-200"), open-ended ("100-" or "-200"), or a single line ("42").'
+          description: '1-indexed inclusive lines: "100-200", "100-", "-200", or "42"'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['instancePath']
@@ -582,21 +582,21 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'set_script_source',
     category: 'write',
-    description: 'Replace entire script source. For partial edits use edit/insert/delete_script_lines. If the target script is inside a Roblox Package, the response includes a packageWarning — surface it to the user (unmarked package changes can be reverted by package auto-update).',
+    description: 'Use to overwrite a whole script when the rewrite is larger than a few targeted line edits.',
     inputSchema: {
       type: 'object',
       properties: {
         instancePath: {
           type: 'string',
-          description: 'Canonical path to a LuaSourceContainer'
+          description: 'Canonical path to the script instance to overwrite'
         },
         source: {
           type: 'string',
-          description: 'New source code'
+          description: 'Full replacement source; existing content is discarded'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['instancePath', 'source']
@@ -605,29 +605,29 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'edit_script_lines',
     category: 'write',
-    description: 'Replace exact text in a script. Without line_range, old_string must match exactly once in the script. Pass line_range as a single line (e.g. "42") to anchor the edit when old_string is ambiguous. If the target script is inside a Roblox Package, the response includes a packageWarning — surface it to the user (unmarked package changes can be reverted by package auto-update).',
+    description: 'Use to replace an exact snippet of script text with new text, leaving the rest untouched.',
     inputSchema: {
       type: 'object',
       properties: {
         instancePath: {
           type: 'string',
-          description: 'Canonical path to a LuaSourceContainer'
+          description: 'Canonical path to the script instance to edit'
         },
         old_string: {
           type: 'string',
-          description: 'Exact text to find and replace. Must be unique in the script unless line_range is provided.'
+          description: 'Exact text to find; must be unique unless line_range is set'
         },
         new_string: {
           type: 'string',
-          description: 'Replacement text'
+          description: 'Text that replaces old_string in the script'
         },
         line_range: {
           type: 'string',
-          description: 'Optional single line where old_string begins, such as "42". When provided, skips uniqueness check and requires old_string to match starting at that exact line.'
+          description: '1-indexed line where old_string starts, skips uniqueness check'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['instancePath', 'old_string', 'new_string']
@@ -636,25 +636,25 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'insert_script_lines',
     category: 'write',
-    description: 'Insert lines after a given line number (0 = beginning). If the target script is inside a Roblox Package, the response includes a packageWarning — surface it to the user (unmarked package changes can be reverted by package auto-update).',
+    description: 'Use to add new lines to a script at a chosen point without touching existing lines.',
     inputSchema: {
       type: 'object',
       properties: {
         instancePath: {
           type: 'string',
-          description: 'Canonical path to a LuaSourceContainer'
+          description: 'Canonical path to the script instance to edit'
         },
         afterLine: {
           type: 'number',
-          description: 'Insert after this line (0 = beginning)'
+          description: '1-indexed line to insert after; 0 inserts at the top'
         },
         newContent: {
           type: 'string',
-          description: 'Content to insert'
+          description: 'Text to insert, may span multiple lines'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['instancePath', 'newContent']
@@ -663,21 +663,21 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'delete_script_lines',
     category: 'write',
-    description: 'Delete a range of lines. line_range is 1-indexed and inclusive. If the target script is inside a Roblox Package, the response includes a packageWarning — surface it to the user (unmarked package changes can be reverted by package auto-update).',
+    description: 'Use to remove a contiguous block of lines from a script by line number.',
     inputSchema: {
       type: 'object',
       properties: {
         instancePath: {
           type: 'string',
-          description: 'Canonical path to a LuaSourceContainer'
+          description: 'Canonical path to the script instance to edit'
         },
         line_range: {
           type: 'string',
-          description: 'Line range to delete: "start-end" (e.g. "100-200") or a single line ("42"). Open-ended ranges are not accepted for deletion.'
+          description: '1-indexed inclusive "100-200" or "42"; no open ends'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['instancePath', 'line_range']
@@ -688,28 +688,28 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'set_attribute',
     category: 'write',
-    description: 'Set an attribute. Supports primitives, Vector3, Color3, UDim2, BrickColor.',
+    description: 'Use to write a single named attribute onto an instance, creating or overwriting it.',
     inputSchema: {
       type: 'object',
       properties: {
         instancePath: {
           type: 'string',
-          description: 'Canonical DataModel path'
+          description: 'Canonical path of the instance to write to.'
         },
         attributeName: {
           type: 'string',
-          description: 'Attribute name'
+          description: 'Attribute name to create or overwrite.'
         },
         attributeValue: {
-          description: 'Value (string, number, boolean, or object for Vector3/Color3/UDim2)'
+          description: 'Primitive, or object with _type for Vector3/Color3/UDim2.'
         },
         valueType: {
           type: 'string',
-          description: 'Type hint if needed'
+          description: 'Type hint, string keeps true/false as literal text.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['instancePath', 'attributeName', 'attributeValue']
@@ -718,17 +718,17 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'get_attributes',
     category: 'read',
-    description: 'Get all attributes on an instance',
+    description: 'Use to read every attribute and its value type from one instance.',
     inputSchema: {
       type: 'object',
       properties: {
         instancePath: {
           type: 'string',
-          description: 'Canonical DataModel path'
+          description: 'Canonical path of the instance to read.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['instancePath']
@@ -737,21 +737,21 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'delete_attribute',
     category: 'write',
-    description: 'Delete an attribute',
+    description: 'Use to remove one attribute from an instance.',
     inputSchema: {
       type: 'object',
       properties: {
         instancePath: {
           type: 'string',
-          description: 'Canonical DataModel path'
+          description: 'Canonical path of the instance to edit.'
         },
         attributeName: {
           type: 'string',
-          description: 'Attribute name'
+          description: 'Attribute to remove, absent names are not an error.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['instancePath', 'attributeName']
@@ -762,17 +762,17 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'get_tags',
     category: 'read',
-    description: 'Get all tags on an instance',
+    description: 'Use to list the CollectionService tags currently on one instance.',
     inputSchema: {
       type: 'object',
       properties: {
         instancePath: {
           type: 'string',
-          description: 'Canonical DataModel path'
+          description: 'Canonical path of the instance to read.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['instancePath']
@@ -781,21 +781,21 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'add_tag',
     category: 'write',
-    description: 'Add a tag',
+    description: 'Use to tag an instance so CollectionService driven code picks it up.',
     inputSchema: {
       type: 'object',
       properties: {
         instancePath: {
           type: 'string',
-          description: 'Canonical DataModel path'
+          description: 'Canonical path of the instance to tag.'
         },
         tagName: {
           type: 'string',
-          description: 'Tag name'
+          description: 'Tag to add, exact and case sensitive.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['instancePath', 'tagName']
@@ -804,21 +804,21 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'remove_tag',
     category: 'write',
-    description: 'Remove a tag',
+    description: 'Use to untag an instance so tag driven code stops handling it.',
     inputSchema: {
       type: 'object',
       properties: {
         instancePath: {
           type: 'string',
-          description: 'Canonical DataModel path'
+          description: 'Canonical path of the instance to untag.'
         },
         tagName: {
           type: 'string',
-          description: 'Tag name'
+          description: 'Tag to remove, exact and case sensitive.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['instancePath', 'tagName']
@@ -827,17 +827,17 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'get_tagged',
     category: 'read',
-    description: 'Get all instances with a specific tag',
+    description: 'Use to find every instance in the place that carries a given tag.',
     inputSchema: {
       type: 'object',
       properties: {
         tagName: {
           type: 'string',
-          description: 'Tag name'
+          description: 'Tag to look up, exact and case sensitive.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['tagName']
@@ -846,67 +846,53 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
 
   // === Selection ===
   {
-    name: 'get_selection',
-    category: 'read',
-    description: 'Get all currently selected objects',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        instance_id: {
-          type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
-        }
-      }
-    }
-  },
-  {
     name: 'selection',
     category: 'read',
-    description: 'Get, replace, or frame the Studio selection. action="get" returns the selected instances (same data as get_selection). action="set" selects paths, with mode="set" to replace, "add" to extend, or "remove" to deselect; an empty paths array in set mode clears the selection. action="view" points the edit-mode camera at a BasePart or Model so the next capture_screenshot frames it, using from (azimuth in degrees, 0 is +X and 90 is +Z), angleY (elevation), and padding (distance scale).',
+    description: 'Use to read or replace the Studio selection, or to aim the edit-mode camera at an instance before a screenshot.',
     inputSchema: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
           enum: ['get', 'set', 'view'],
-          description: 'What to do with the selection. "get" reads it, "set" changes it, "view" frames the target in the edit-mode viewport.'
+          description: 'Whether to read, replace, or frame the selected instances.'
         },
         paths: {
           type: 'array',
           items: { type: 'string', minLength: 1 },
-          description: 'action="set": canonical instance paths to apply. An empty array clears the selection when mode is "set".'
+          description: 'Instance paths for set; empty array clears when mode is set.'
         },
         mode: {
           type: 'string',
           enum: ['set', 'add', 'remove'],
           default: 'set',
-          description: 'action="set": whether paths replace the selection, are added to it, or are removed from it.'
+          description: 'How paths apply to what is already selected.'
         },
         path: {
           type: 'string',
           minLength: 1,
-          description: 'action="view": canonical path of the BasePart or Model to frame.'
+          description: 'Path of the BasePart or Model to frame for view.'
         },
         from: {
           type: 'number',
-          description: 'action="view": camera azimuth in degrees around the target; 0 looks from +X, 90 from +Z.'
+          description: 'Camera azimuth in degrees; 0 is +X, 90 is +Z.'
         },
         padding: {
           type: 'number',
           exclusiveMinimum: 0,
           maximum: 10,
           default: 1,
-          description: 'action="view": distance scale from the target. Values above 1 pull the camera back.'
+          description: 'Distance scale from target; above 1 pulls the camera back.'
         },
         angleY: {
           type: 'number',
           minimum: -89,
           maximum: 89,
-          description: 'action="view": camera elevation in degrees; positive looks down at the target.'
+          description: 'Camera elevation in degrees; positive looks downward.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['action']
@@ -917,21 +903,21 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'execute_luau',
     category: 'write',
-    description: 'Execute Luau code in plugin context. target="server" and target="client-N" run against live runtime DataModels with PluginSecurity permissions; use eval_*_runtime instead when you need the game Script/LocalScript VM require cache. Use print()/warn() for output. Return value is captured.',
+    description: 'Use to run Luau in a plugin sandbox against the edit, server, or client DataModel with plugin permissions.',
     inputSchema: {
       type: 'object',
       properties: {
         code: {
           type: 'string',
-          description: 'Luau code to execute'
+          description: 'Luau to run; print/warn and the return value are captured.'
         },
         target: {
           type: 'string',
-          description: 'Instance target: "edit" (default), "server", "client-1", "client-2", etc.'
+          description: 'Which DataModel: edit (default), server, or client-N.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['code']
@@ -940,17 +926,17 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'eval_server_runtime',
     category: 'write',
-    description: 'Execute Luau on the server peer in the running game\'s Script VM (shares require cache with user game scripts, unlike execute_luau target=server which runs in plugin context). Requires a running playtest; the runtime bridge is created automatically inside the play DataModel, including for playtests started manually via the Studio Play button.',
+    description: 'Use during a playtest to run Luau on the server inside the game\'s own script VM and require cache.',
     inputSchema: {
       type: 'object',
       properties: {
         code: {
           type: 'string',
-          description: 'Luau code to execute. Use return ... to get a value back.'
+          description: 'Luau to run; use return to send a value back.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['code']
@@ -959,21 +945,21 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'eval_client_runtime',
     category: 'write',
-    description: 'Execute Luau on a client peer in the running game\'s LocalScript VM (shares require cache with user game scripts, unlike execute_luau target=client-N which runs in plugin context). Requires a running playtest; the runtime bridge is created automatically inside the play DataModel, including for playtests started manually via the Studio Play button.',
+    description: 'Use during a playtest to run Luau on a client inside the game\'s own LocalScript VM and require cache.',
     inputSchema: {
       type: 'object',
       properties: {
         code: {
           type: 'string',
-          description: 'Luau code to execute. Use return ... to get a value back.'
+          description: 'Luau to run; use return to send a value back.'
         },
         target: {
           type: 'string',
-          description: 'Client target: "client-1" (default), "client-2", etc.'
+          description: 'Which client peer, client-1 by default.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['code']
@@ -984,50 +970,50 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'grep_scripts',
     category: 'read',
-    description: 'Ripgrep-inspired search across all script sources. Supports literal and Lua pattern matching (with top-level "|" alternation), context lines, early termination, and results grouped by script with line/column numbers.',
+    description: 'Use to find which scripts contain given text or a Lua pattern, with line numbers.',
     inputSchema: {
       type: 'object',
       properties: {
         pattern: {
           type: 'string',
-          description: 'Search text. Literal by default; with usePattern=true it is a case-sensitive Lua pattern with top-level "|" alternation (e.g. "foo|bar").'
+          description: 'Text to find, or a Lua pattern when usePattern is true'
         },
         caseSensitive: {
           type: 'boolean',
-          description: 'Literal search case sensitivity (default: false). Lua pattern mode is always case-sensitive; passing false with usePattern=true is rejected.'
+          description: 'Literal-search case sensitivity, default false'
         },
         usePattern: {
           type: 'boolean',
-          description: 'Use case-sensitive Lua pattern matching instead of literal search (default: false). Supports top-level alternation: "a|b" matches a line containing "a" or "b". Note: Lua patterns are NOT PCRE — use %d/%a/%w classes and ".-" (not ".*?"); ^ $ ( ) . % + - * ? [ ] are magic.'
+          description: 'Treat pattern as a Lua pattern (not PCRE), default false'
         },
         contextLines: {
           type: 'number',
-          description: 'Number of context lines before/after each match (default: 0)'
+          description: 'Lines of context shown around each match, default 0'
         },
         maxResults: {
           type: 'number',
-          description: 'Max total matches before stopping (default: 100)'
+          description: 'Total match cap before search stops, default 100'
         },
         maxResultsPerScript: {
           type: 'number',
-          description: 'Max matches per script (like rg -m)'
+          description: 'Cap on matches reported per script'
         },
         filesOnly: {
           type: 'boolean',
-          description: 'Only return matching script paths, not line details (default: false)'
+          description: 'Return only matching script paths, default false'
         },
         path: {
           type: 'string',
-          description: 'Subtree to search (e.g. "game.ServerScriptService")'
+          description: 'Subtree to limit the search to, defaults to whole place'
         },
         classFilter: {
           type: 'string',
           enum: ['Script', 'LocalScript', 'ModuleScript'],
-          description: 'Only search scripts of this class type'
+          description: 'Restrict to one script class, default all classes'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['pattern']
@@ -1038,59 +1024,59 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'manage_instance',
     category: 'write',
-    description: 'Launch, authorize, complete, close, inspect, and find revisions for Studio instances. Every launch returns launch_id, native pid, source, and lifecycle state; status and close accept launch_id before the plugin connects and instance_id after association. Use action="launch" with source="baseplate" for a blank place, or source="local_file" with local_place_file for a local place; neither uses place_id. A process-identity launch requires action="authorize" after injection is prepared, followed by action="complete" only after the injected runtime is independently attested. Use action="list_place_versions" with place_id to retrieve version numbers through Open Cloud asset versions, then action="launch" with source="place_revision", place_id, and place_version to open an older revision. action="launch" source="published_place" opens the latest published place and is blocked if that place_id is already connected; source="place_revision" is allowed because Studio opens explicit past revisions as anonymous local copies. Requires ROBLOX_OPEN_CLOUD_API_KEY with asset:read for list_place_versions.',
+    description: 'Use to launch, close, or inspect Studio processes, or to list past versions of a published place.',
     inputSchema: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
           enum: ['launch', 'authorize', 'complete', 'close', 'status', 'list_place_versions'],
-          description: 'Instance management action. authorize resumes a protocol-v3 launch after the caller has prepared process-scoped injection. complete releases broker process ownership after the caller independently attests that injection finished.'
+          description: 'Which lifecycle step to run on a Studio process.'
         },
         source: {
           type: 'string',
           enum: ['baseplate', 'local_file', 'published_place', 'place_revision'],
-          description: 'Required for action="launch". baseplate/local_file do not use place_id; published_place opens the latest place; place_revision opens a specific older version as an anonymous local copy.'
+          description: 'What the launched window opens; only launch uses it.'
         },
         local_place_file: {
           type: 'string',
-          description: 'Required for source="local_file". Path to a .rbxl/.rbxlx place file.'
+          description: 'Path to a .rbxl or .rbxlx file for a local source.'
         },
         place_id: {
           type: 'number',
-          description: 'Only used for source="published_place", source="place_revision", and action="list_place_versions". Do not pass for source="baseplate" or source="local_file".'
+          description: 'Published place ID; never pass it for local or blank places.'
         },
         place_version: {
           type: 'number',
-          description: 'Required for source="place_revision". Use action="list_place_versions" to discover available version numbers.'
+          description: 'Version number of the revision to open.'
         },
         require_process_identity: {
           type: 'boolean',
-          description: 'For action="launch": require an exact native PID and process creation time, return launch_id immediately, and retain broker ownership of the native process until action="complete" succeeds. The process remains suspended until action="authorize" begins injection. If identity capture, authorization, or ownership completion fails, the broker stops the launched process.'
+          description: 'Capture exact PID and keep the new process suspended.'
         },
         wait_for_connection: {
           type: 'boolean',
-          description: 'For action="launch": wait until the MCP plugin connects and return instance_id (default true). false returns launch_id immediately and continues association/failure tracking asynchronously. Ignored when require_process_identity=true, which always returns the suspended launch immediately.'
+          description: 'Block until the plugin connects, default true.'
         },
         timeout_ms: {
           type: 'number',
-          description: 'For action="launch": max milliseconds for plugin connection (default 120000). The deadline also applies asynchronously when wait_for_connection=false. It does not apply when require_process_identity=true; that protocol uses the broker ownership-completion lease through action="complete".'
+          description: 'Milliseconds to wait for plugin connection, default 120000.'
         },
         studio_executable: {
           type: 'string',
-          description: 'For action="launch": exact Roblox Studio executable to launch instead of auto-discovering a version.'
+          description: 'Exact Studio executable path instead of auto-discovery.'
         },
         studio_working_directory: {
           type: 'string',
-          description: 'For action="launch": working directory for the Studio process. Isolates relative plugin folders so parallel launches do not share one plugin directory.'
+          description: 'Working directory, isolates per-launch plugin folders.'
         },
         process_environment: {
           type: 'object',
-          description: 'For action="launch": process-scoped environment patch applied only while creating Studio. Values are never retained in the managed-instance registry.',
+          description: 'Env patch used only while creating the process.',
           properties: {
             set: {
               type: 'object',
-              description: 'Environment variables to set for the Studio process.',
+              description: 'Variables to set for the Studio process.',
               propertyNames: {
                 pattern: '^[A-Za-z_][A-Za-z0-9_]*$'
               },
@@ -1100,7 +1086,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
             },
             remove: {
               type: 'array',
-              description: 'Environment variables to remove from the Studio process environment.',
+              description: 'Variable names to drop from the process environment.',
               items: {
                 type: 'string',
                 pattern: '^[A-Za-z_][A-Za-z0-9_]*$'
@@ -1111,19 +1097,19 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         },
         max_page_size: {
           type: 'number',
-          description: 'For action="list_place_versions": number of versions to return, clamped to 1-50 (default 10).'
+          description: 'Versions per page, default 10, clamped to 1-50.'
         },
         page_token: {
           type: 'string',
-          description: 'For action="list_place_versions": pagination token returned by a prior call.'
+          description: 'Pagination token from a prior version listing.'
         },
         instance_id: {
           type: 'string',
-          description: 'For action="close" or action="status": connected Studio instance to inspect or close. Mutually exclusive with launch_id.'
+          description: 'Connected instance to inspect or close, not with launch_id.'
         },
         launch_id: {
           type: 'string',
-          description: 'For action="close" or action="status": opaque identifier returned by launch. Works before plugin connection and for retained terminal launch status. Mutually exclusive with instance_id.'
+          description: 'ID from launch, usable before the plugin connects.'
         }
       },
       required: ['action']
@@ -1134,27 +1120,27 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'solo_playtest',
     category: 'write',
-    description: 'Start, stop, or inspect a single-player Studio playtest. Use action="start" with mode="play" or "run", action="stop" to end the playtest, and action="status" to inspect active runtime roles. Returns brief lifecycle status only; read script output with get_runtime_logs. Ordinary start/eval/stop workflows do not need reset_simulation_state; use simulation reset only for network or device-simulator tests. For multi-client testing use multiplayer_playtest.',
+    description: 'Use to start, stop, or check a single-player playtest before running runtime evaluation or profiling.',
     inputSchema: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
           enum: ['start', 'stop', 'status'],
-          description: 'Lifecycle action to run.'
+          description: 'Which lifecycle step to perform.'
         },
         mode: {
           type: 'string',
           enum: ['play', 'run'],
-          description: 'Required for action="start".'
+          description: 'Play spawns a character, run starts the server only.'
         },
         timeout: {
           type: 'number',
-          description: 'Max seconds to wait for start readiness or stop teardown. Defaults: start 60, stop 15.'
+          description: 'Seconds to wait; defaults are 60 for start, 15 for stop.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['action']
@@ -1163,18 +1149,18 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'set_network_profile',
     category: 'write',
-    description: 'Apply simulated network conditions to active playtest client peers via NetworkSettings in plugin context. Requires a running playtest and targets only client peers: pass target="client-1", "client-2", etc., or target="all-clients". Presets: great = 30ms total latency (15ms in / 15ms out), 0ms jitter, 0% packet loss; good = 100ms total latency (50ms in / 50ms out), 10ms jitter, 0% packet loss; poor = 300ms (150ms in / 150ms out), 100ms jitter, 0.5% packet loss. profile="custom" applies only the numeric overrides provided; packet loss values above Roblox\'s 0.5% engine limit are rejected.',
+    description: 'Use set_network_profile to give playtest clients simulated latency, jitter, or packet loss while testing.',
     inputSchema: {
       type: 'object',
       properties: {
         profile: {
           type: 'string',
           enum: ['great', 'good', 'poor', 'custom'],
-          description: 'Network condition preset. Presets set all six simulation fields; custom requires overrides.'
+          description: 'Named condition preset; custom applies only your overrides.'
         },
         target: {
           type: 'string',
-          description: 'Client target: "client-1" (default), "client-2", etc., or "all-clients" to apply to every connected playtest client.'
+          description: 'Client peer such as "client-1" (default), or "all-clients".'
         },
         overrides: {
           type: 'object',
@@ -1183,41 +1169,41 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
             InboundNetworkMinDelayMs: {
               type: 'number',
               minimum: 0,
-              description: 'Server-to-client minimum latency in milliseconds.'
+              description: 'Server to client minimum latency, milliseconds.'
             },
             OutboundNetworkMinDelayMs: {
               type: 'number',
               minimum: 0,
-              description: 'Client-to-server minimum latency in milliseconds.'
+              description: 'Client to server minimum latency, milliseconds.'
             },
             InboundNetworkJitterMs: {
               type: 'number',
               minimum: 0,
-              description: 'Server-to-client latency jitter in milliseconds.'
+              description: 'Server to client latency jitter, milliseconds.'
             },
             OutboundNetworkJitterMs: {
               type: 'number',
               minimum: 0,
-              description: 'Client-to-server latency jitter in milliseconds.'
+              description: 'Client to server latency jitter, milliseconds.'
             },
             InboundNetworkLossPercent: {
               type: 'number',
               minimum: 0,
               maximum: 0.5,
-              description: 'Server-to-client packet loss percentage. Roblox engine limit is 0.5%; larger values are rejected.'
+              description: 'Server to client packet loss percent, engine max 0.5.'
             },
             OutboundNetworkLossPercent: {
               type: 'number',
               minimum: 0,
               maximum: 0.5,
-              description: 'Client-to-server packet loss percentage. Roblox engine limit is 0.5%; larger values are rejected.'
+              description: 'Client to server packet loss percent, engine max 0.5.'
             }
           },
-          description: 'Optional exact NetworkSettings property overrides. For preset profiles, overrides replace preset fields. For custom, only these properties are applied.'
+          description: 'Exact NetworkSettings values replacing preset fields.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['profile']
@@ -1226,22 +1212,22 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'get_simulation_state',
     category: 'read',
-    description: 'Inspect current NetworkSettings and/or StudioDeviceSimulatorService state for edit and connected clients only. Defaults to include="both" and target="edit-and-clients"; server peers are skipped. Use when a task explicitly involves simulated network/device behavior or when you suspect stale simulator state. This is not part of ordinary playtest lifecycle.',
+    description: 'Use get_simulation_state to check current simulated network and device settings when you suspect stale state.',
     inputSchema: {
       type: 'object',
       properties: {
         include: {
           type: 'string',
           enum: ['network', 'deviceSimulator', 'both'],
-          description: 'Simulation state to inspect: "network", "deviceSimulator", or "both" (default both).'
+          description: 'Which simulation subsystem to report (default both).'
         },
         target: {
           type: 'string',
-          description: 'Simulation target scope: "edit-and-clients" (default), "edit", "all-clients", or a specific "client-N". Server peers are never included.'
+          description: 'Scope: edit-and-clients (default), edit, all-clients, client-N.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       }
     }
@@ -1249,25 +1235,25 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'reset_simulation_state',
     category: 'write',
-    description: 'Reset reachable NetworkSettings and/or StudioDeviceSimulatorService state for deterministic network/device tests. Defaults to target="edit-and-clients" and resets both network and device simulator state. Network reset sets all six simulated NetworkSettings fields to 0; device reset calls StopSimulationAsync(). Do not call as routine Studio lifecycle hygiene. Use it after intentionally changing simulation settings, when get_simulation_state shows dirty state, or when a task explicitly requires a clean network/device baseline.',
+    description: 'Use reset_simulation_state to clear simulated network and device settings back to a clean baseline.',
     inputSchema: {
       type: 'object',
       properties: {
         target: {
           type: 'string',
-          description: 'Simulation target scope: "edit-and-clients" (default), "edit", "all-clients", or a specific "client-N". Server peers are skipped.'
+          description: 'Scope: edit-and-clients (default), edit, all-clients, client-N.'
         },
         network: {
           type: 'boolean',
-          description: 'Reset simulated NetworkSettings fields to 0 (default true).'
+          description: 'Zero the six simulated network fields (default true).'
         },
         deviceSimulator: {
           type: 'boolean',
-          description: 'Stop Studio device simulation with StopSimulationAsync() (default true).'
+          description: 'Stop any active device simulation (default true).'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       }
     }
@@ -1275,25 +1261,25 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'get_device_simulator_state',
     category: 'read',
-    description: 'Inspect StudioDeviceSimulatorService state and supported built-in device presets. Defaults to target="edit"; also supports a regular playtest client target such as "client-1". Server targets are not supported. When no simulated device is active, active-only fields are omitted and isSimulating=false.',
+    description: 'Use get_device_simulator_state to see the active simulated device and list built-in device presets.',
     inputSchema: {
       type: 'object',
       properties: {
         target: {
           type: 'string',
-          description: 'Device simulator target: "edit" (default) or a regular playtest client like "client-1". Server targets are rejected.'
+          description: '"edit" (default) or a playtest client like "client-1".'
         },
         deviceId: {
           type: 'string',
-          description: 'Optional built-in device preset ID to inspect with GetDeviceInfoAsync.'
+          description: 'Built-in preset ID to report full details for.'
         },
         includeDeviceList: {
           type: 'boolean',
-          description: 'Include the built-in device preset list from GetDeviceListAsync (default true).'
+          description: 'Include the built-in device preset list (default true).'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       }
     }
@@ -1301,21 +1287,21 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'set_device_simulator',
     category: 'write',
-    description: 'Set or stop StudioDeviceSimulatorService using built-in device presets only. Defaults to target="edit"; supports "client-N" and "all-clients"; rejects server targets. Applies deviceId first, then orientation, resolution, pixelDensity, and scalingMode overrides.',
+    description: 'Use set_device_simulator to emulate a phone or tablet viewport in Studio, or to stop simulating one.',
     inputSchema: {
       type: 'object',
       properties: {
         target: {
           type: 'string',
-          description: 'Device simulator target: "edit" (default), "client-1", "client-2", etc., or "all-clients".'
+          description: '"edit" (default), a "client-N" peer, or "all-clients".'
         },
         deviceId: {
           type: 'string',
-          description: 'Built-in device preset ID from get_device_simulator_state.'
+          description: 'Built-in device preset ID; list the presets first.'
         },
         orientation: {
           type: 'string',
-          description: 'ScreenOrientation enum name, e.g. "LandscapeRight", "LandscapeLeft", "Portrait", or a full Enum.ScreenOrientation.* string.'
+          description: 'ScreenOrientation name such as "LandscapeRight".'
         },
         resolution: {
           type: 'object',
@@ -1331,23 +1317,23 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
             }
           },
           required: ['width', 'height'],
-          description: 'Optional resolution override applied after the device preset.'
+          description: 'Viewport size override applied after the preset.'
         },
         pixelDensity: {
           type: 'number',
-          description: 'Optional positive pixel density override applied after the device preset.'
+          description: 'Positive pixel density applied after the preset.'
         },
         scalingMode: {
           type: 'string',
-          description: 'DeviceSimulatorScalingMode enum name, e.g. "ScaleToPhysicalSize", or a full Enum.DeviceSimulatorScalingMode.* string.'
+          description: 'DeviceSimulatorScalingMode name like "ScaleToPhysicalSize".'
         },
         stopSimulation: {
           type: 'boolean',
-          description: 'Stop device simulation. When true, do not pass other simulator setters.'
+          description: 'Stop simulating; pass no other setters alongside it.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       }
     }
@@ -1355,29 +1341,29 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'capture_device_matrix',
     category: 'write',
-    description: 'Apply up to 6 ordered Studio device simulator settings, capture each viewport screenshot, and restore the previous simulator state by default when the prior state is default or a built-in preset. Custom device persistence is intentionally unsupported. Defaults to target="edit"; supports regular playtest client targets but not server or all-clients targets.',
+    description: 'Use capture_device_matrix to screenshot one scene across several simulated devices in a single pass.',
     inputSchema: {
       type: 'object',
       properties: {
         entries: {
           type: 'array',
           maxItems: 6,
-          description: 'Ordered device capture entries. Each entry may set a deviceId and optional simulator overrides before capture.',
+          description: 'Ordered device setups, each captured in turn, at most 6.',
           items: {
             type: 'object',
             additionalProperties: false,
             properties: {
               label: {
                 type: 'string',
-                description: 'Optional label included in the screenshot metadata.'
+                description: 'Label recorded in this shot\'s metadata.'
               },
               deviceId: {
                 type: 'string',
-                description: 'Built-in device preset ID from get_device_simulator_state.'
+                description: 'Built-in device preset ID for this entry.'
               },
               orientation: {
                 type: 'string',
-                description: 'ScreenOrientation enum name or full Enum.ScreenOrientation.* string.'
+                description: 'ScreenOrientation name for this entry.'
               },
               resolution: {
                 type: 'object',
@@ -1397,39 +1383,39 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
               },
               pixelDensity: {
                 type: 'number',
-                description: 'Optional positive pixel density override.'
+                description: 'Positive pixel density override for this entry.'
               },
               scalingMode: {
                 type: 'string',
-                description: 'DeviceSimulatorScalingMode enum name or full Enum.DeviceSimulatorScalingMode.* string.'
+                description: 'DeviceSimulatorScalingMode name for this entry.'
               }
             }
           }
         },
         target: {
           type: 'string',
-          description: 'Device simulator target: "edit" (default) or a regular playtest client such as "client-1". all-clients and server targets are rejected.'
+          description: '"edit" (default) or a playtest client like "client-1".'
         },
         format: {
           type: 'string',
           enum: ['jpeg', 'png'],
-          description: 'Screenshot image format. "jpeg" (default) is compact; "png" is lossless but may exceed inline size limits.'
+          description: 'Image format; jpeg is compact, png is lossless but large.'
         },
         quality: {
           type: 'number',
-          description: 'JPEG quality 1-100 (default 92). Ignored for png.'
+          description: 'JPEG quality 1-100 (default 92), ignored for png.'
         },
         settleSeconds: {
           type: 'number',
-          description: 'Seconds to wait after applying each simulator entry before capturing (default 0.3).'
+          description: 'Wait after applying each entry, seconds (default 0.3).'
         },
         restoreAfter: {
           type: 'boolean',
-          description: 'Restore the previous default or built-in preset simulator state after the matrix finishes (default true). Custom active devices are not preserved.'
+          description: 'Restore the prior simulator state after (default true).'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['entries']
@@ -1438,36 +1424,36 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'multiplayer_playtest',
     category: 'write',
-    description: 'Start, inspect, or end a StudioTestService multiplayer playtest. action="start" launches numPlayers clients, action="status" inspects state, action="add_players" adds players, action="leave_client" removes one client, and action="end" tears the session down. Returns brief lifecycle status only; read script output with get_runtime_logs.',
+    description: 'Use to start, inspect, grow, or end a multiplayer playtest with multiple simulated client peers.',
     inputSchema: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
           enum: ['start', 'status', 'add_players', 'leave_client', 'end'],
-          description: 'Lifecycle action to run.'
+          description: 'Lifecycle step to run on the multiplayer session.'
         },
         numPlayers: {
           type: 'number',
-          description: 'Required for action="start" and action="add_players". Number of client players (1-8).'
+          description: 'Client players to launch or add, 1-8; start/add_players only.'
         },
         target: {
           type: 'string',
-          description: 'Client target for action="leave_client", such as "client-1". Defaults to "client-1".'
+          description: 'Client to remove for leave_client, defaults to client-1.'
         },
         testArgs: {
-          description: 'For action="start": JSON-compatible table passed to StudioTestService:GetTestArgs() on server and clients.'
+          description: 'JSON table given to StudioTestService:GetTestArgs() at start.'
         },
         value: {
-          description: 'Optional value passed to action="end" teardown.'
+          description: 'Optional value handed to the end teardown.'
         },
         timeout: {
           type: 'number',
-          description: 'Max seconds to wait for start peer detection or action completion. Defaults to 30.'
+          description: 'Seconds to wait for peers or completion, defaults to 30.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['action']
@@ -1476,29 +1462,29 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'get_runtime_logs',
     category: 'read',
-    description: 'Read the in-memory log buffers captured by Studio plugin peers. Each buffer captures ~64 KB of recent LogService output; runtime peers seed from LogService:GetLogHistory() at plugin load so early startup logs emitted before the plugin finishes loading can still be returned, then continue capturing LogService.MessageOut entries. Live structured LogService entries include their context dictionary as optional data; Roblox GetLogHistory does not expose context for entries seeded at plugin load. Oldest entries drop when over budget. Entries include capturedBy for the plugin buffer that observed the log. In ordinary Studio play/run sessions, LogService reflects logs across edit/server/client, so script-origin peer is not reliable and entries omit peer. In StudioTestService multiplayer sessions only, peer attribution is reliable and entries also include peer. target=all (default) merges buffers and dedups same-message-and-level entries captured within 2s across different buffers.',
+    description: 'Use to read recent script output and errors captured from Studio edit, server, and client peers.',
     inputSchema: {
       type: 'object',
       properties: {
         target: {
           type: 'string',
-          description: 'Capture buffer to read from: "edit", "server", "client-N", or "all" (default). "all" merges buffers and dedups cross-buffer reflections within a 2s window.'
+          description: 'Buffer to read: edit, server, client-N, or all (default).'
         },
         since: {
           type: 'number',
-          description: 'Return only entries with seq > since. Pass back the previous response\'s nextSince (single target) or perCaptureNextSince entry (target=all) for incremental polling.'
+          description: 'Return entries with seq above this; pass back nextSince.'
         },
         tail: {
           type: 'number',
-          description: 'Return only the last N entries after since/filter is applied.'
+          description: 'Keep only the last N entries, applied after since and filter.'
         },
         filter: {
           type: 'string',
-          description: 'Plain substring matched against each entry\'s message (no pattern semantics; literal text). Applied after since, before tail.'
+          description: 'Literal substring matched on message, no pattern syntax.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       }
     }
@@ -1506,61 +1492,61 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'capture_script_profiler',
     category: 'read',
-    description: 'Capture one short ScriptProfilerService sample on a running server or client peer and return a compact CPU summary. Use this for Luau/script optimization, not render, physics, networking, or engine microprofiler lanes. Minimal flow: start or reproduce the workload, call capture_script_profiler with target="server" or a specific "client-N", inspect top_functions, patch the suspected hot path, then capture again with the same target/workload/duration_ms/frequency/filter/min_total_us to compare. top_functions is sorted by descending total_us after native/plugin/min/filter exclusions; each row includes rank plus function_index, the 1-based index into the raw Roblox Functions array. Function and node TotalDuration values follow Roblox\'s exported Script Profiler JSON format and are reported in microseconds as total_us. total_us is cumulative profiler TotalDuration during the capture; nested labels/functions can overlap, so do not sum rows as total CPU time. source is the runtime script path reported by Roblox and may need mapping back to editable source with search tools. If function names are too broad, add debug.profilebegin("Area:SpecificStep") / debug.profileend() around suspected code and pass filter="Area:" or another label prefix; matching custom labels appear in debug_labels and top_functions with their script source and no line number. The result echoes effective options in applied and omitted.filtered_out counts rows removed by filter. Keep captures short while actively triggering the behavior; duration_ms defaults to 1000 and is clamped to 100-15000. Pass output_path when you need the raw Roblox Script Profiler JSON for offline comparison or deeper analysis. This tool owns the start/stop/request profiler lifecycle for one capture and does not expose long-lived profiler sessions.',
+    description: 'Use to find hot Luau functions on a running server or client peer during a reproducible workload.',
     inputSchema: {
       type: 'object',
       properties: {
         target: {
           type: 'string',
           pattern: '^(server|client-[0-9]+)$',
-          description: 'Runtime peer to profile: "server" (default) or "client-N". Use get_connected_instances to discover available runtime roles. target="edit" is invalid because ScriptProfiler captures running code.'
+          description: 'Runtime peer to profile: server (default) or client-N.'
         },
         duration_ms: {
           type: 'number',
           default: 1000,
           minimum: 100,
           maximum: 15000,
-          description: 'Sample duration in milliseconds. Defaults to 1000; clamped to 100-15000 so the Studio bridge does not hang on long captures.'
+          description: 'Sample length in milliseconds, default 1000, clamped 100-15000.'
         },
         frequency: {
           type: 'number',
           default: 1000,
           minimum: 1,
           maximum: 10000,
-          description: 'ScriptProfiler sampling frequency in samples per second (Hz). Defaults to 1000.'
+          description: 'Sampling rate in samples per second, default 1000.'
         },
         max_functions: {
           type: 'number',
           default: 20,
           minimum: 1,
           maximum: 100,
-          description: 'Maximum number of top_functions and debug_labels to return. Defaults to 20; clamped to 1-100.'
+          description: 'Rows of functions and labels returned, default 20, max 100.'
         },
         min_total_us: {
           type: 'number',
           default: 0,
           minimum: 0,
-          description: 'Omit functions below this TotalDuration in microseconds after capture. Defaults to 0.'
+          description: 'Drop functions under this total microseconds, default 0.'
         },
         filter: {
           type: 'string',
-          description: 'Optional case-insensitive substring matched against function name and source before top_functions are returned. Useful for focusing on one module or debug.profilebegin label prefix.'
+          description: 'Case-insensitive substring on function name or source.'
         },
         include_native: {
           type: 'boolean',
-          description: 'Include native Roblox frames in top_functions. Defaults to false to keep optimization output focused on game Luau and debug labels.'
+          description: 'Include native engine frames, default false.'
         },
         include_plugin: {
           type: 'boolean',
-          description: 'Include plugin frames in top_functions. Defaults to false because the MCP capture implementation can otherwise add noise.'
+          description: 'Include plugin frames, default false.'
         },
         output_path: {
           type: 'string',
-          description: 'Optional local path where the MCP server writes the raw Script Profiler JSON. The tool result then includes output_path instead of inlining the raw JSON.'
+          description: 'Local file for raw profiler JSON instead of inline output.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       }
     }
@@ -1568,54 +1554,54 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'capture_micro_profiler',
     category: 'read',
-    description: 'Capture one short Roblox MicroProfiler sample on a running server or client peer using LibMP and return a structured CPU-time attribution dataset. Use this when the performance question is "where is the frame time going?" across scripts, physics, render, network, jobs, scheduler, GC, and engine timers. The primary data is top_groups/top_timers sorted by inclusive_us, exclusive-sorted companion lists, top_threads, top_call_edges, frame_summary, and analysis_window/data_quality so an agent can tell whether a result is steady, spiky, thread-bound, wrapper-heavy, or truncated. For baseline comparison, first capture an empty baseplate/control with the same target/settings and summary_output_path, then capture the game with baseline_path pointing at that saved JSON; saved summaries include a compact comparison_index so baseline_comparison can compare full compact aggregates instead of only visible top rows. Pass baseline inline when the previous capture is already in context. Times are reported in microseconds by converting LibMP MicroProfiler nanosecond ticks; inclusive_us is cumulative nested timer time and can overlap across timers/threads, so do not sum rows as total frame time. *_per_s fields are normalized by analysis_window.analysis_duration_us, not requested duration_ms. pct_of_analyzed_wall can exceed 100 when work overlaps. focus can restrict to script, physics, render, network, or jobs. include_idle defaults false so Sleep/idle noise is omitted. max_events bounds iterator work; event_limit_hit and partial_reasons explain when rankings are useful but partial, so narrow focus/filter or raise max_events for deeper analysis. recommended_tools is intentionally brief; the main purpose is digestible attribution data, not an agent diagnosis. frame_breakdown adds per-frame top timers by exclusive time for the longest frames in the analyzed window plus the trigger frame, so a single spike frame can be read directly instead of inferred from window aggregates. Besides the default blocking capture, action="arm" starts a triggered capture and returns a capture_id immediately: the plugin enables the profiler and watches every Heartbeat for the trigger (frame_time threshold, attribute change, or log substring), snapshots post_trigger_frames later, and action="collect" polls that capture_id (status armed|triggered|done|timed_out|cancelled|failed) and returns the analysis once it is done. action="cancel" aborts an armed capture; action="analyze" re-runs the analysis over an already stored snapshot (last 3 captures, retained 10 minutes) with different focus/filter/include_sections and no new capture. For triggered captures the analysis window is [trigger_frame_id - frames_before, trigger_frame_id + post_trigger_frames] and is walked from the trigger frame first so max_events cannot cut off the spike itself. To keep replies small the inline response carries frame_summary, frame_breakdown, top_groups, top_timers, and data_quality; ask for top_groups_by_exclusive, top_timers_by_exclusive, top_threads, or top_call_edges through include_sections (or "all"), and sections_omitted names whatever was trimmed. summary_output_path always receives the full untrimmed response.',
+    description: 'Use to see where frame time goes across scripts, physics, render, network, and engine jobs.',
     inputSchema: {
       type: 'object',
       properties: {
         target: {
           type: 'string',
           pattern: '^(server|client-[0-9]+)$',
-          description: 'Runtime peer to profile: "server" (default) or "client-N". Use get_connected_instances to discover available runtime roles.'
+          description: 'Runtime peer to profile: server (default) or client-N.'
         },
         action: {
           type: 'string',
           enum: ['capture', 'arm', 'collect', 'cancel', 'analyze'],
           default: 'capture',
-          description: 'What this call does. "capture" (default) blocks for duration_ms and returns the analysis of the last frame_window frames. "arm" turns the profiler and capture on, starts a Heartbeat watcher for the trigger, and returns a capture_id immediately without blocking. "collect" polls that capture_id and returns status armed|triggered|done|timed_out|cancelled|failed, with the full analysis once status is done. "cancel" stops an armed or triggered capture and discards its snapshot. "analyze" re-runs the analysis over a stored snapshot (last 3 captures, kept 10 minutes) with the current settings, so a different focus/filter/include_sections needs no re-capture.'
+          description: 'What this call does in the capture lifecycle.'
         },
         capture_id: {
           type: 'string',
-          description: 'Capture returned by action="capture"/"arm". Required for action="collect", "cancel", and "analyze". When target is omitted the server routes these calls back to the peer the capture was armed on.'
+          description: 'Id from a prior capture or arm, needed to poll or re-analyze.'
         },
         trigger: {
           type: 'object',
-          description: 'Trigger condition for action="arm". Pick one kind and set its fields.',
+          description: 'Trigger condition for an armed capture, pick one kind.',
           properties: {
             kind: {
               type: 'string',
               enum: ['frame_time', 'attribute', 'log'],
-              description: 'Trigger type. "frame_time" is the main one: fire on the first complete frame at or above threshold_ms. "attribute" fires when an attribute on an instance changes to a truthy value (or to value when given), which lets a server script trigger a capture on a client peer. "log" fires on a LogService message containing substring, handy in single-player playtests where the client log reflects both peers.'
+              description: 'Which condition fires the armed capture.'
             },
             threshold_ms: {
               type: 'number',
               minimum: 1,
               maximum: 10000,
-              description: 'kind="frame_time": fire on the first new complete, non-paused frame whose CPU frame time is at least this many milliseconds.'
+              description: 'Fire on the first complete frame at or above this many ms.'
             },
             instance: {
               type: 'string',
-              description: 'kind="attribute": path to the instance holding the attribute, such as game.ReplicatedStorage.ProfilerFlags.'
+              description: 'Path to the instance holding the watched attribute.'
             },
             name: {
               type: 'string',
-              description: 'kind="attribute": attribute name to watch on that instance.'
+              description: 'Attribute name to watch on that instance.'
             },
             value: {
-              description: 'kind="attribute": optional exact value to wait for. Omit to fire on any value that is not nil or false.'
+              description: 'Exact value to wait for, omit for any truthy value.'
             },
             substring: {
               type: 'string',
-              description: 'kind="log": plain (non-pattern) substring matched against LogService output.'
+              description: 'Plain substring matched against log output, not a pattern.'
             }
           }
         },
@@ -1624,28 +1610,28 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           default: 60000,
           minimum: 1000,
           maximum: 300000,
-          description: 'How long an armed capture waits for its trigger before giving up with status timed_out. Defaults to 60000.'
+          description: 'Wait this long in ms for the trigger, default 60000.'
         },
         frames_before: {
           type: 'number',
           default: 8,
           minimum: 0,
           maximum: 200,
-          description: 'Frames before the trigger frame to include in the analysis window. Defaults to 8. frames_before + post_trigger_frames must stay at or below 240 because the MicroProfiler ring holds 256 frames; frames_before is reduced to fit when it does not.'
+          description: 'Frames kept before the trigger frame, default 8.'
         },
         post_trigger_frames: {
           type: 'number',
           default: 30,
           minimum: 0,
           maximum: 200,
-          description: 'Frames captured after the trigger frame before the snapshot is taken, and included in the analysis window. Defaults to 30. frames_before + post_trigger_frames must stay at or below 240 because the ring holds 256 frames.'
+          description: 'Frames kept after the trigger frame, default 30.'
         },
         max_frame_breakdowns: {
           type: 'number',
           default: 3,
           minimum: 0,
           maximum: 10,
-          description: 'How many of the longest frames in the window get their own frame_breakdown row of top timers by exclusive time. Defaults to 3; use 0 to omit frame_breakdown. The trigger frame is always added when it is not already among them.'
+          description: 'Longest frames given their own breakdown, default 3, 0 omits.'
         },
         include_sections: {
           type: 'array',
@@ -1653,119 +1639,119 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
             type: 'string',
             enum: ['top_groups_by_exclusive', 'top_timers_by_exclusive', 'top_threads', 'top_call_edges', 'all']
           },
-          description: 'Extra analysis sections to keep in the inline response. The default inline sections are frame_summary, frame_breakdown, top_groups, top_timers, and data_quality; anything else is trimmed and listed in sections_omitted. Use "all" to keep every section. summary_output_path always receives the full response regardless of this setting.'
+          description: 'Extra sections to keep inline, or all to keep everything.'
         },
         duration_ms: {
           type: 'number',
           default: 1000,
           minimum: 100,
           maximum: 5000,
-          description: 'MicroProfiler capture duration in milliseconds. Defaults to 1000; clamped to 100-5000 because decoded event streams are much larger than ScriptProfiler output.'
+          description: 'Capture length in ms, default 1000, clamped 100-5000.'
         },
         focus: {
           type: 'string',
           enum: ['all', 'script', 'physics', 'render', 'network', 'jobs'],
           default: 'all',
-          description: 'Optional subsystem focus. Use "all" first for unknown bottlenecks; use a narrower focus after top_groups identifies the area.'
+          description: 'Narrow attribution to one subsystem after a broad pass.'
         },
         filter: {
           type: 'string',
-          description: 'Optional case-insensitive substring matched against timer name and group after capture. Use to inspect a specific timer family such as Heartbeat, Simulation, $Script, or RbxTransport.'
+          description: 'Case-insensitive substring on timer name and group.'
         },
         max_timers: {
           type: 'number',
           default: 20,
           minimum: 1,
           maximum: 100,
-          description: 'Maximum number of top_timers to return. Defaults to 20.'
+          description: 'Rows of top timers to return, default 20.'
         },
         max_groups: {
           type: 'number',
           default: 20,
           minimum: 1,
           maximum: 100,
-          description: 'Maximum number of top_groups to return. Each group includes its own hot timers. Defaults to 20.'
+          description: 'Rows of top groups to return, default 20.'
         },
         max_timers_per_group: {
           type: 'number',
           default: 5,
           minimum: 0,
           maximum: 20,
-          description: 'Maximum number of nested top_timers included inside each top_groups row. Defaults to 5; use 0 to omit nested timers.'
+          description: 'Nested timers inside each group row, default 5, 0 omits.'
         },
         max_related_timers: {
           type: 'number',
           default: 3,
           minimum: 0,
           maximum: 10,
-          description: 'Maximum per-row parent, child, and thread context entries. Defaults to 3; use 0 to omit per-row relationship context.'
+          description: 'Parent, child, and thread rows per timer, default 3.'
         },
         min_total_us: {
           type: 'number',
           default: 0,
           minimum: 0,
-          description: 'Omit timers below this inclusive_us threshold after idle/focus/filter processing. Defaults to 0.'
+          description: 'Drop timers under this inclusive microseconds, default 0.'
         },
         include_idle: {
           type: 'boolean',
-          description: 'Include Sleep/idle timers. Defaults to false because idle time usually hides actionable engine work.'
+          description: 'Include Sleep and idle timers, default false.'
         },
         include_gpu: {
           type: 'boolean',
-          description: 'Include GPU thread events when LibMP exposes them. Defaults to false to keep CPU diagnosis focused.'
+          description: 'Include GPU thread events when exposed, default false.'
         },
         max_events: {
           type: 'number',
           default: 250000,
           minimum: 10000,
           maximum: 1000000,
-          description: 'Maximum LibMP log events to walk. Defaults to 250000; raise for deeper captures or lower to keep quick iterations snappy.'
+          description: 'Cap on profiler log events walked, default 250000.'
         },
         frame_window: {
           type: 'number',
           default: 240,
           minimum: 1,
           maximum: 2000,
-          description: 'Analyze only the last N MicroProfiler frames from the snapshot. Defaults to 240.'
+          description: 'Analyze only the last N captured frames, default 240.'
         },
         output_path: {
           type: 'string',
-          description: 'Optional local path where the MCP server writes the raw MicroProfiler snapshot bytes. The normal response stays summarized.'
+          description: 'Local file for the raw snapshot bytes.'
         },
         summary_output_path: {
           type: 'string',
-          description: 'Optional local path where the MCP server writes the summarized JSON response, including a compact comparison_index. Use this to save an empty-baseplate/control capture for later baseline_path comparison.'
+          description: 'Local file for the full untrimmed summary JSON.'
         },
         baseline_path: {
           type: 'string',
-          description: 'Optional local path to a prior capture_micro_profiler summarized JSON response. The tool adds baseline_comparison using current minus baseline, normalized by capture duration.'
+          description: 'Local path to a saved summary JSON to diff against.'
         },
         baseline: {
           type: 'object',
-          description: 'Optional inline prior capture_micro_profiler summarized response to compare against. Prefer baseline_path for large captures.'
+          description: 'Inline prior summary to diff against, large ones use a path.'
         },
         baseline_label: {
           type: 'string',
-          description: 'Label used for the baseline side of baseline_comparison, such as "empty_baseplate".'
+          description: 'Name for the baseline side of the comparison.'
         },
         current_label: {
           type: 'string',
-          description: 'Label used for the current capture side of baseline_comparison, such as the game or scenario name.'
+          description: 'Name for the current side of the comparison.'
         },
         max_comparison_rows: {
           type: 'number',
           default: 20,
           minimum: 1,
           maximum: 100,
-          description: 'Maximum delta rows returned per baseline_comparison section: groups, timers, threads, and call_edges. Defaults to 20.'
+          description: 'Delta rows per comparison section, default 20.'
         },
         include_comparison_index: {
           type: 'boolean',
-          description: 'Include the full compact comparison_index in the normal response. Defaults to false; summary_output_path still saves it for baseline comparison.'
+          description: 'Inline the compact comparison index, default false.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       }
     }
@@ -1773,50 +1759,50 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'breakpoints',
     category: 'write',
-    description: 'Manage Studio debugger breakpoints through ScriptDebuggerService. Use this when the user asks to debug with Studio breakpoints. Prefer log breakpoints for agent debugging: pass log_message and let continue_execution default to true, reproduce the issue, then read get_runtime_logs filtered by "Breakpoint". Minimal flow: set a log breakpoint, run or trigger the behavior, call get_runtime_logs with filter="Breakpoint", then call action="clear" to remove MCP-managed breakpoints. Generated breakpoint logs are prefixed with "Breakpoint" plus script_path:line; Studio breakpoint errors also start with "Breakpoint", so this filter captures both successful breakpoint logs and breakpoint-related failures. Set breakpoints on target="edit" before starting a playtest when possible; for an already-running playtest target the runtime DataModel directly, such as "server" or "client-1". Do not set continue_execution=false unless the target DataModel already has a ScriptDebuggerService.OnStopped handler that returns Enum.DebuggerResumeType.Resume for breakpoint/non-exception stops; otherwise the playtest can get stuck and MCP can lose the server/client peers. Minimal OnStopped reference: local sds=game:GetService("ScriptDebuggerService"); sds.OnStopped=function(info) if info.Reason ~= Enum.ScriptStoppedReason.Exception then return Enum.DebuggerResumeType.Resume end print("EXCEPTION:", info.ExceptionText); return Enum.DebuggerResumeType.Resume end. MCP-managed breakpoints persist minimal script_path/line recovery data per place and target so action="list" and action="clear" can find tool-created edit/server/client breakpoints after MCP/plugin reloads. action="clear" removes only breakpoints created through this MCP tool by default; pass clear_all=true only when you intentionally want to clear every Studio breakpoint in the targeted DataModel, including user-created breakpoints. This tool only manages breakpoint lifecycle; it does not pause, resume, step, inspect variables, or install OnStopped callbacks. Requires Studio Debugger Luau API beta enabled.',
+    description: 'Use breakpoints to log or pause at a script line when the user asks to debug inside Studio.',
     inputSchema: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
           enum: ['set', 'remove', 'clear', 'list'],
-          description: 'Breakpoint action to run. set/remove require script_path and line. clear removes MCP-managed breakpoints by default. list returns breakpoints created through this MCP tool in the targeted DataModel.'
+          description: 'Lifecycle step; set and remove need script_path and line.'
         },
         clear_all: {
           type: 'boolean',
-          description: 'Only applies to action="clear". Omit or set false to remove only MCP-managed breakpoints tracked by this tool. Set true to call ScriptDebuggerService:ClearBreakpoints() and clear every Studio breakpoint in the targeted DataModel, including user-created breakpoints.'
+          description: 'For clear: true also wipes user-made stops, default false.'
         },
         script_path: {
           type: 'string',
-          description: 'Canonical path to a LuaSourceContainer, for example game.ServerScriptService.Main or game.ServerScriptService[".dir"].ReproScript. Required for set/remove.'
+          description: 'Canonical path to the script, required for set and remove.'
         },
         line: {
           type: 'number',
-          description: '1-based line number for set/remove.'
+          description: '1-based line number, required for set and remove.'
         },
         enabled: {
           type: 'boolean',
-          description: 'Whether the breakpoint is enabled when set. Defaults to true.'
+          description: 'Whether the breakpoint starts enabled, default true.'
         },
         condition: {
           type: 'string',
-          description: 'Optional Luau condition expression for set.'
+          description: 'Luau expression that must be true for the stop to apply.'
         },
         log_message: {
           type: 'string',
-          description: 'Optional Studio breakpoint log expression list for set, such as "\'health\', health". Literal text must be quoted as a Luau string. The tool prefixes this with "Breakpoint" and script_path:line. After reproducing, read get_runtime_logs with filter="Breakpoint" so breakpoint logs and Studio breakpoint errors are both visible.'
+          description: 'Luau expression list to log, quote literal text as strings.'
         },
         continue_execution: {
           type: 'boolean',
-          description: 'Whether the breakpoint should log and continue without pausing. Defaults to true when log_message is provided; otherwise false. Only set false when you have first installed a ScriptDebuggerService.OnStopped handler on the same target that resumes breakpoint/non-exception stops with Enum.DebuggerResumeType.Resume; without that handler the playtest can get stuck and MCP can lose server/client peers.'
+          description: 'Log without pausing, default true when log_message is set.'
         },
         target: {
           type: 'string',
-          description: 'Peer to target: "edit" (default), "server", or "client-N". Set edit breakpoints before playtests; target server/client-N for running play DataModels.'
+          description: 'Peer to target: edit (default), server, or client-N.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['action']
@@ -1827,7 +1813,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'get_connected_instances',
     category: 'read',
-    description: 'List all connected plugin instances with their roles. Use during multi-client playtest to discover server and client instances for targeted commands.',
+    description: 'Use to list connected plugin peers and their roles when targeting a specific edit, server, or client.',
     inputSchema: {
       type: 'object',
       properties: {}
@@ -1836,7 +1822,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'list_studio_sessions',
     category: 'read',
-    description: 'List the Studio sessions (open places) connected to this MCP server, each with its place name/ID and connected instances (edit, playtest server/client-N). Shows which session is pinned as the routing target. When multiple sessions are connected and none is pinned, tool calls that omit instance_id error with multiple_instances_connected — call set_active_session to pin one.',
+    description: 'Use to see which Studio places are connected, their instance IDs, and which one is pinned for routing.',
     inputSchema: {
       type: 'object',
       properties: {}
@@ -1845,369 +1831,27 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'set_active_session',
     category: 'write',
-    description: 'Pin which connected Studio session (place) subsequent tools operate on when several Studio windows are connected and you omit instance_id. Pinning by placeId or placeName scopes the whole session including its playtest server/client instances. An explicit instance_id on a tool call always overrides the pin. Pass clear: true to unpin and return to default routing. The pin auto-clears when the pinned session fully disconnects.',
+    description: 'Use to pin one connected Studio place as the default routing target for calls that omit instance_id.',
     inputSchema: {
       type: 'object',
       properties: {
         instanceId: {
           type: 'string',
-          description: 'Specific instance ID to pin (e.g. the same place opened in two windows). From list_studio_sessions.'
+          description: 'One instance to pin, for a place open in two windows.'
         },
         placeId: {
           type: 'number',
-          description: 'Place ID of the session to pin (from list_studio_sessions)'
+          description: 'Numeric place ID of the session to pin.'
         },
         placeName: {
           type: 'string',
-          description: 'Place name to pin (case-insensitive; must match exactly one connected session)'
+          description: 'Place name, case-insensitive, must match one session.'
         },
         clear: {
           type: 'boolean',
-          description: 'Unpin and return to default routing'
+          description: 'True unpins and restores default routing.'
         }
       }
-    }
-  },
-
-  // === Undo/Redo ===
-  {
-    name: 'undo',
-    category: 'write',
-    description: 'Undo the last change in Roblox Studio. Uses ChangeHistoryService to reverse the most recent operation.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        instance_id: {
-          type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
-        }
-      }
-    }
-  },
-  {
-    name: 'redo',
-    category: 'write',
-    description: 'Redo the last undone change in Roblox Studio. Uses ChangeHistoryService to reapply the most recently undone operation.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        instance_id: {
-          type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
-        }
-      }
-    }
-  },
-
-  // === Build Library ===
-  {
-    name: 'export_build',
-    category: 'read',
-    description: 'Export a Model/Folder into a compact, token-efficient build JSON format and auto-save it to the local build library. The output contains a palette (unique BrickColor+Material combos mapped to short keys) and compact part arrays with positions normalized relative to the bounding box center. The file is saved to build-library/{style}/{id}.json automatically.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        instancePath: {
-          type: 'string',
-          description: 'Canonical path to the Model or Folder to export'
-        },
-        outputId: {
-          type: 'string',
-          description: 'Build ID for the output (e.g. "medieval/cottage_01"). Defaults to style/instance_name.'
-        },
-        style: {
-          type: 'string',
-          enum: ['medieval', 'modern', 'nature', 'scifi', 'misc'],
-          description: 'Style category for the build (default: misc)'
-        },
-        instance_id: {
-          type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
-        }
-      },
-      required: ['instancePath']
-    }
-  },
-  {
-    name: 'create_build',
-    category: 'write',
-    description: 'Create a new build model from scratch and save it to the library. Define parts using compact arrays [posX, posY, posZ, sizeX, sizeY, sizeZ, rotX, rotY, rotZ, paletteKey, shape?, transparency?]. Palette maps short keys to [BrickColor, Material] pairs. The build is saved and can be referenced by import_build or import_scene.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: {
-          type: 'string',
-          description: 'Build ID including style prefix (e.g. "medieval/torch_01", "nature/bush_small")'
-        },
-        style: {
-          type: 'string',
-          enum: ['medieval', 'modern', 'nature', 'scifi', 'misc'],
-          description: 'Style category'
-        },
-        palette: {
-          type: 'object',
-          description: 'Map of short keys to [BrickColor, Material] or [BrickColor, Material, MaterialVariant] tuples. E.g. {"a": ["Dark stone grey", "Concrete"], "b": ["Brown", "Wood", "MyCustomWood"]}'
-        },
-        parts: {
-          type: 'array',
-          description: 'Array of parts. Object format: {position:[x,y,z], size:[x,y,z], rotation:[x,y,z], paletteKey, shape?, transparency?}. Tuple format [posX,posY,posZ,sizeX,sizeY,sizeZ,rotX,rotY,rotZ,paletteKey,shape?,transparency?] also accepted.',
-          items: {
-            anyOf: [
-              {
-                type: 'object',
-                additionalProperties: false,
-                required: ['position', 'size', 'rotation', 'paletteKey'],
-                properties: {
-                  position: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: 'World position [X, Y, Z] in studs.' },
-                  size: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: 'Part size [X, Y, Z] in studs.' },
-                  rotation: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: 'Euler rotation [X, Y, Z] in degrees.' },
-                  paletteKey: { type: 'string', minLength: 1, description: 'Palette key naming the BrickColor/Material pair.' },
-                  shape: { type: 'string', enum: ['Block', 'Wedge', 'Cylinder', 'Ball', 'CornerWedge'], description: 'Part shape; defaults to Block.' },
-                  transparency: { type: 'number', minimum: 0, maximum: 1, description: 'Part transparency from 0 (opaque) to 1 (invisible).' }
-                }
-              },
-              {
-                type: 'array',
-                minItems: 10,
-                items: { anyOf: [{ type: 'number' }, { type: 'string' }] }
-              }
-            ]
-          }
-        },
-        bounds: {
-          type: 'array',
-          items: { type: 'number' },
-          description: 'Optional bounding box [X, Y, Z]. Auto-computed if omitted.'
-        }
-      },
-      required: ['id', 'style', 'palette', 'parts']
-    }
-  },
-  {
-    name: 'generate_build',
-    category: 'write',
-    description: `Procedurally generate a build via JS code. ALWAYS generate the entire scene in ONE call - never split into multiple small builds. PREFER high-level primitives over manual loops. No comments. No unnecessary variables. Maximize build detail per line.
-
-EDITING: When modifying an existing build, call get_build first to retrieve the original code. Then make ONLY the targeted changes the user requested - do not rewrite unchanged code. Pass the modified code to generate_build.
-
-HIGH-LEVEL (use these first - each replaces 5-20 lines):
-  room(x,y,z, w,h,d, wallKey, floorKey?, ceilKey?, wallThickness?) - Complete enclosed room (floor+ceiling+4 walls)
-  roof(x,y,z, w,d, style, key, overhang?) - style: "flat"|"gable"|"hip"
-  stairs(x1,y1,z1, x2,y2,z2, width, key) - Auto-generates steps between two points
-  column(x,y,z, height, radius, key, capKey?) - Cylinder with base+capital
-  pew(x,y,z, w,d, seatKey, legKey?) - Bench with seat+backrest+legs
-  arch(x,y,z, w,h, thickness, key, segments?) - Curved archway
-  fence(x1,z1, x2,z2, y, key, postSpacing?) - Fence with posts+rails
-
-BASIC:
-  part(x,y,z, sx,sy,sz, key, shape?, transparency?)
-  rpart(x,y,z, sx,sy,sz, rx,ry,rz, key, shape?, transparency?)
-  wall(x1,z1, x2,z2, height, thickness, key) - vertical plane from (x1,z1) to (x2,z2)
-  floor(x1,z1, x2,z2, y, thickness, key) - horizontal plane at height y, corners (x1,z1)-(x2,z2). NOT fill - only takes 2D corners+y, not 3D points
-  fill(x1,y1,z1, x2,y2,z2, key, [ux,uy,uz]?) - 3D volume between two 3D points
-  beam(x1,y1,z1, x2,y2,z2, thickness, key)
-
-IMPORTANT: Palette keys must match exactly. Use only keys defined in your palette object, not color names.
-CUSTOM MATERIALS: Use search_materials to find MaterialVariant names, then reference them as the 3rd palette element: {"a": ["Color", "BaseMaterial", "VariantName"]}.
-
-REPETITION:
-  row(x,y,z, count, spacingX, spacingZ, fn(i,cx,cy,cz))
-  grid(x,y,z, countX, countZ, spacingX, spacingZ, fn(ix,iz,cx,cy,cz))
-
-Shapes: Block(default), Wedge, Cylinder, Ball, CornerWedge. Max 10000 parts. Math and rng() available.
-CYLINDER AXIS: Roblox cylinders extend along the X axis. For upright cylinders, use size (height, diameter, diameter) with rz=90. The column() primitive handles this automatically.
-
-EXAMPLE - compact cabin (17 lines):
-room(0,0,0,8,4,6,"a","b","a")
-roof(0,4,0,8,6,"gable","c")
-wall(-4,-2,4,-2,4,1,"a")
-part(0,2,3,3,3,0.3,"a","Block",0.4)
-row(-2,0,-1,3,0,2,(i,cx,cy,cz)=>{pew(cx,0,cz,3,2,"d")})
-column(-3,0,-2,4,0.5,"a","b")
-column(3,0,-2,4,0.5,"a","b")
-part(0,2,0,2,1,1,"b")`,
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: {
-          type: 'string',
-          description: 'Build ID including style prefix (e.g. "medieval/church_01")'
-        },
-        style: {
-          type: 'string',
-          enum: ['medieval', 'modern', 'nature', 'scifi', 'misc'],
-          description: 'Style category'
-        },
-        palette: {
-          type: 'object',
-          description: 'Map of short keys to [BrickColor, Material] or [BrickColor, Material, MaterialVariant] tuples. E.g. {"a": ["Dark stone grey", "Cobblestone"], "b": ["Brown", "WoodPlanks", "MyCustomWood"]}. MaterialVariant is optional - use it to reference custom materials from MaterialService.'
-        },
-        code: {
-          type: 'string',
-          description: 'JavaScript code using the primitives above to generate parts procedurally'
-        },
-        seed: {
-          type: 'number',
-          description: 'Optional seed for deterministic rng() output (default: 42)'
-        }
-      },
-      required: ['id', 'style', 'palette', 'code']
-    }
-  },
-  {
-    name: 'import_build',
-    category: 'write',
-    description: 'Import a build into Roblox Studio. Accepts either a full build data object OR a library ID string (e.g. "medieval/church_01") to load from the build library. When using generate_build or create_build, pass the build ID string instead of the full data.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        buildData: {
-          description: 'Either a build data object (with palette, parts, etc.) OR a library ID string (e.g. "medieval/church_01") to load from the build library'
-        },
-        targetPath: {
-          type: 'string',
-          description: 'Canonical parent DataModel path where the model will be created'
-        },
-        position: {
-          type: 'array',
-          items: { type: 'number' },
-          description: 'World position offset [X, Y, Z]'
-        },
-        instance_id: {
-          type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
-        }
-      },
-      required: ['buildData', 'targetPath']
-    }
-  },
-  {
-    name: 'list_library',
-    category: 'read',
-    description: 'List available builds in the local build library. Returns build IDs, styles, bounds, and part counts. Optionally filter by style.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        style: {
-          type: 'string',
-          enum: ['medieval', 'modern', 'nature', 'scifi', 'misc'],
-          description: 'Filter by style category'
-        }
-      }
-    }
-  },
-  {
-    name: 'search_materials',
-    category: 'read',
-    description: 'Search for MaterialVariant instances in MaterialService by name. Use this to find custom materials before using them in generate_build or create_build palettes. Returns material names and their base material types.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        query: {
-          type: 'string',
-          description: 'Search query to match against material names (case-insensitive). Leave empty to list all.'
-        },
-        maxResults: {
-          type: 'number',
-          description: 'Max results to return (default: 50)'
-        },
-        instance_id: {
-          type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
-        }
-      }
-    }
-  },
-  {
-    name: 'get_build',
-    category: 'read',
-    description: 'Get a build from the library by ID. Returns metadata, palette, and generator code (if the build was created with generate_build). IMPORTANT: When the user asks to modify an existing build, ALWAYS call get_build first to retrieve the original code, then make targeted edits to only the relevant lines, and call generate_build with the modified code. Never rewrite the entire code from scratch - only change what the user asked to change.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: {
-          type: 'string',
-          description: 'Build ID (e.g. "medieval/church_01")'
-        }
-      },
-      required: ['id']
-    }
-  },
-  {
-    name: 'import_scene',
-    category: 'write',
-    description: 'Import a full scene layout. Provide a scene with model references (resolved from library) and placement data. Each model is placed at the specified position/rotation. Can also include inline custom builds.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        sceneData: {
-          type: 'object',
-          description: 'Scene layout object with: models (map of key to library build ID), place (array of [key, position, rotation?]), and optional custom (array of inline build objects with name, position, palette, parts)',
-          properties: {
-            models: {
-              type: 'object',
-              description: 'Map of short keys to library build IDs (e.g. {"A": "medieval/cottage_01"})'
-            },
-            place: {
-              type: 'array',
-              description: 'Array of placements. Preferred format: {modelKey, position:[x,y,z], rotation?:[x,y,z]}. Legacy tuple format [modelKey, [x,y,z], [rotX?,rotY?,rotZ?]] is also accepted.',
-              items: {
-                anyOf: [
-                  {
-                    type: 'object',
-                    additionalProperties: false,
-                    required: ['modelKey', 'position'],
-                    properties: {
-                      modelKey: {
-                        type: 'string',
-                        description: 'Key of the model in the scene models map.'
-                      },
-                      position: {
-                        type: 'array',
-                        items: { type: 'number' },
-                        description: 'World position [X, Y, Z] in studs.'
-                      },
-                      rotation: {
-                        type: 'array',
-                        items: { type: 'number' },
-                        description: 'Euler rotation [X, Y, Z] in degrees.'
-                      }
-                    }
-                  },
-                  {
-                    type: 'array',
-                    items: {
-                      anyOf: [
-                        {
-                          type: 'string'
-                        },
-                        {
-                          type: 'array',
-                          items: { type: 'number' }
-                        }
-                      ]
-                    }
-                  }
-                ]
-              }
-            },
-            custom: {
-              type: 'array',
-              description: 'Array of inline custom builds with {n: name, o: [x,y,z], palette: {...}, parts: [...]}',
-              items: { type: 'object' }
-            }
-          }
-        },
-        targetPath: {
-          type: 'string',
-          description: 'Canonical parent DataModel path for the scene (default: game.Workspace)'
-        },
-        instance_id: {
-          type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
-        }
-      },
-      required: ['sceneData']
     }
   },
 
@@ -2215,34 +1859,34 @@ part(0,2,0,2,1,1,"b")`,
   {
     name: 'search_assets',
     category: 'read',
-    description: 'Search the public Creator Store without requiring Roblox credentials. Returns compact normalized rows with assetId, name, a normalized description excerpt, and audio duration in seconds when available. Searches include all creators by default; set robloxCreatedOnly to restrict results to assets created by Roblox. Image searches use Decals; Particle and VFX searches use effect-focused Models. Call get_asset_details only for a shortlisted asset that needs full catalog metadata, get_asset_thumbnail for an inline visual, and preview_asset before insertion. Every inserted asset is sanitized without regard to its creator.',
+    description: 'Use to discover public Creator Store assets by keyword and type without Roblox credentials.',
     inputSchema: {
       type: 'object',
       properties: {
         assetType: {
           type: 'string',
           enum: ['Audio', 'Model', 'Decal', 'Image', 'Particle', 'VFX', 'Plugin', 'MeshPart', 'Video', 'FontFamily'],
-          description: 'Type of asset to search for. Image maps to Decal. Particle and VFX map to Creator Store Model searches.'
+          description: 'Image searches Decals; Particle and VFX search effect Models.'
         },
         query: {
           type: 'string',
-          description: 'Search keywords. For particles/VFX, useful terms include particle effect, VFX, explosion, smoke, aura, beam, trail, and impact effect. Particle/VFX searches append an effect-specific suffix when needed.'
+          description: 'Search keywords, optional when browsing a whole type.'
         },
         maxResults: {
           type: 'number',
           minimum: 1,
           maximum: 100,
-          description: 'Max results to return (default: 25, maximum: 100)'
+          description: 'Rows to return (default 25, cap 100).'
         },
         sortBy: {
           type: 'string',
           enum: ['Relevance', 'Trending', 'Top', 'AudioDuration', 'CreateTime', 'UpdatedTime', 'Ratings'],
-          description: 'Sort order (default: Relevance)'
+          description: 'Result ordering, defaults to Relevance.'
         },
         robloxCreatedOnly: {
           type: 'boolean',
           default: false,
-          description: 'Only show assets created by the Roblox account (default: false). All creators are searched when false; insertion sanitizes every asset regardless of creator.'
+          description: 'Limit to Roblox-made assets (default false).'
         }
       },
       required: ['assetType']
@@ -2251,13 +1895,13 @@ part(0,2,0,2,1,1,"b")`,
   {
     name: 'get_asset_details',
     category: 'read',
-    description: 'Get full public Creator Store metadata for one shortlisted asset without requiring Roblox credentials. Prefer search_assets for compact discovery.',
+    description: 'Use for full catalog metadata on one shortlisted asset ID after a Creator Store search.',
     inputSchema: {
       type: 'object',
       properties: {
         assetId: {
           type: 'number',
-          description: 'The Roblox asset ID'
+          description: 'Roblox catalog asset ID to look up.'
         }
       },
       required: ['assetId']
@@ -2266,18 +1910,18 @@ part(0,2,0,2,1,1,"b")`,
   {
     name: 'get_asset_thumbnail',
     category: 'read',
-    description: 'Get the public thumbnail image for an asset as base64 PNG, suitable for vision LLMs. No Roblox credentials are required.',
+    description: 'Use to view an asset visually as a base64 PNG before shortlisting or inserting it.',
     inputSchema: {
       type: 'object',
       properties: {
         assetId: {
           type: 'number',
-          description: 'The Roblox asset ID'
+          description: 'Roblox catalog asset ID to render.'
         },
         size: {
           type: 'string',
           enum: ['150x150', '420x420', '768x432'],
-          description: 'Thumbnail size (default: 420x420)'
+          description: 'Image dimensions in pixels, default 420x420.'
         }
       },
       required: ['assetId']
@@ -2286,30 +1930,30 @@ part(0,2,0,2,1,1,"b")`,
   {
     name: 'insert_asset',
     category: 'write',
-    description: 'Securely insert a Creator Store asset into Studio. Public third-party assets require "Allow Loading Third Party Assets" in Studio under Game Settings > Security. The loaded asset is forced to remain unparented while every descendant at unlimited depth is scanned. Every LuaSourceContainer (including Script, LocalScript, ModuleScript, and future subclasses) and every PackageLink is destroyed without inspecting or exposing source. A second unlimited-depth scan must find zero forbidden instances before any content is parented; otherwise the entire loaded asset is destroyed and nothing is inserted. Names, Unicode, nesting depth, creator verification, contents, and reputation never affect this policy. Legitimate visual objects such as ParticleEmitter, Beam, Trail, Attachment, Decal, Texture, meshes, lights, sounds, Fire, Smoke, and Sparkles are preserved. Optionally set position.',
+    description: 'Use to place a Creator Store asset into the live place after you have vetted it.',
     inputSchema: {
       type: 'object',
       properties: {
         assetId: {
           type: 'number',
-          description: 'The Roblox asset ID to insert'
+          description: 'Roblox catalog asset ID to insert.'
         },
         parentPath: {
           type: 'string',
-          description: 'Canonical parent DataModel path (default: game.Workspace)'
+          description: 'Canonical parent path, defaults to game.Workspace.'
         },
         position: {
           type: 'object',
           properties: {
-            x: { type: 'number', description: 'X component in studs.' },
-            y: { type: 'number', description: 'Y component in studs.' },
-            z: { type: 'number', description: 'Z component in studs.' }
+            x: { type: 'number', description: 'World X in studs.' },
+            y: { type: 'number', description: 'World Y in studs.' },
+            z: { type: 'number', description: 'World Z in studs.' }
           },
-          description: 'Optional world position to place the asset'
+          description: 'World position to place the asset when set.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['assetId']
@@ -2318,75 +1962,75 @@ part(0,2,0,2,1,1,"b")`,
   {
     name: 'generate_model',
     category: 'write',
-    description: 'Generate a Roblox Model with GenerationService:GenerateModelAsync from a prompt, a Roblox image asset ID, a PNG reference image, or prompt+image. The tool only creates and stages the generated model under ServerStorage; use ordinary instance tools afterward if you want to parent, position, scale, anchor, or integrate it into the world. Provide exactly one of image_path, image_base64, or image_asset_id when using an image. Roblox requires image inputs as rbxassetid/rbxasset URIs, so image_path and image_base64 are uploaded as Roblox Decal/Image assets first using configured upload credentials; pass image_asset_id to use an existing asset without uploading. schema defaults to Body1 for a single mesh output; use schema_groups for custom segmentation such as Body plus named wheel/finger/limb groups. Output is intentionally brief: success returns only success and modelPath; failure returns only success and error.',
+    description: 'Use to create a new 3D model from a text prompt or reference image when no catalog asset fits.',
     inputSchema: {
       type: 'object',
       properties: {
         prompt: {
           type: 'string',
-          description: 'Text prompt describing the model to generate. Required unless an image input is provided.'
+          description: 'What to generate, required unless an image is given.'
         },
         image_path: {
           type: 'string',
-          description: 'Local PNG file path for a visual reference image. Uploaded as a Roblox Decal/Image asset before generation. Mutually exclusive with image_base64 and image_asset_id.'
+          description: 'Local PNG reference, uploaded to Roblox first.'
         },
         image_base64: {
           type: 'string',
           maxLength: MAX_PNG_BASE64_CHARACTERS,
-          description: 'Base64-encoded PNG reference image bytes. Requires image_mime_type="image/png" and is uploaded as a Roblox Decal/Image asset before generation. Mutually exclusive with image_path and image_asset_id.'
+          description: 'Inline PNG reference bytes, uploaded to Roblox first.'
         },
         image_mime_type: {
           type: 'string',
           enum: ['image/png'],
-          description: 'Required when image_base64 is provided. Currently only image/png is supported.'
+          description: 'Format of image_base64, required when it is set.'
         },
         image_asset_id: {
           type: 'number',
-          description: 'Existing Roblox image asset ID used as a visual reference. Mutually exclusive with image_path and image_base64.'
+          description: 'Existing Roblox image asset to reuse as reference.'
         },
         schema: {
           type: 'string',
           enum: ['Body1', 'Car5'],
           default: 'Body1',
-          description: 'Built-in GenerationService schema. Defaults to Body1 for one generated mesh. Use Car5 only for a five-part vehicle chassis.'
+          description: 'Built-in part layout, default Body1 (one mesh).'
         },
         schema_groups: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Custom SchemaDefinition.Groups part names that define generated model segmentation, such as ["Body","Front Left Wheel","Front Right Wheel","Rear Left Wheel","Rear Right Wheel"]. Mutually exclusive with schema.'
+          description: 'Custom part group names, conflicts with schema.'
         },
         name: {
           type: 'string',
-          description: 'Optional name for the generated Model under game.ServerStorage.__MCPGeneratedModels.'
+          description: 'Name for the staged Model under ServerStorage.'
         },
         size: {
           type: 'object',
           properties: {
-            x: { type: 'number', description: 'X component in studs.' },
-            y: { type: 'number', description: 'Y component in studs.' },
-            z: { type: 'number', description: 'Z component in studs.' }
+            x: { type: 'number', description: 'Target X extent in studs.' },
+            y: { type: 'number', description: 'Target Y extent in studs.' },
+            z: { type: 'number', description: 'Target Z extent in studs.' }
           },
-          description: 'Optional approximate generated object size. GenerationService may not match it exactly.'
+          description: 'Rough target size, generation may not match it exactly.'
         },
         max_triangles: {
           type: 'number',
           minimum: 1,
-          description: 'Optional maximum triangle count. Lower values produce more faceted/low-poly results.'
+          description: 'Triangle budget, lower gives more faceted results.'
         },
         generate_textures: {
           type: 'boolean',
-          description: 'Whether GenerationService should generate textures. Defaults to Roblox behavior (true).'
+          description: 'Whether to texture the model, defaults to true.'
         },
         timeout_ms: {
           type: 'number',
           minimum: 1,
           maximum: 300000,
           default: 120000,
-          description: 'Maximum MCP bridge wait for this generation request. Defaults to 120000ms.'
+          description: 'Bridge wait in milliseconds, default 120000.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       }
     }
@@ -2394,39 +2038,39 @@ part(0,2,0,2,1,1,"b")`,
   {
     name: 'preview_asset',
     category: 'read',
-    description: 'Preview a Creator Store asset without inserting it. Public third-party assets require "Allow Loading Third Party Assets" in Studio security settings. The asset stays unparented, receives an unlimited-depth security/capability scan, and is destroyed. Output is compact: normalized capabilities and sound references, explicit script/PackageLink counts, and a hierarchy capped at 100 display nodes. Detailed instance properties are opt-in. Direct Creator Store Audio IDs and accessible nested sounds return temporary inline audio by default. Imported script source is never read or returned.',
+    description: 'Use to inspect a Creator Store asset\'s hierarchy and audio safely before you insert it.',
     inputSchema: {
       type: 'object',
       properties: {
         assetId: {
           type: 'number',
-          description: 'The Roblox asset ID to preview'
+          description: 'Roblox catalog asset ID to inspect.'
         },
         includeProperties: {
           type: 'boolean',
           default: false,
-          description: 'Include detailed properties for displayed hierarchy nodes (default: false).'
+          description: 'Include node properties in the tree (default false).'
         },
         maxDepth: {
           type: 'number',
           default: 4,
-          description: 'Maximum display-tree depth (default: 4). The display is also capped at 100 nodes; the security scan always traverses every descendant.'
+          description: 'Display tree depth, default 4, display caps at 100 nodes.'
         },
         includeAudio: {
           type: 'boolean',
           default: true,
-          description: 'Return temporary inline MCP audio for a direct Creator Store Audio asset and accessible Sound or AudioPlayer references (default: true). Set false to return metadata without downloading audio. Downloads require ROBLOX_OPEN_CLOUD_API_KEY with asset:read permission and are never persisted to disk.'
+          description: 'Return inline audio clips (default true).'
         },
         maxAudioPreviews: {
           type: 'number',
           minimum: 1,
           maximum: 5,
           default: 3,
-          description: 'Maximum unique sound assets to return as inline audio (default: 3, maximum: 5). Each file and the combined response are subject to fixed byte limits.'
+          description: 'Unique sounds to return as audio (default 3, cap 5).'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['assetId']
@@ -2435,34 +2079,34 @@ part(0,2,0,2,1,1,"b")`,
   {
     name: 'upload_asset',
     category: 'write',
-    description: 'Upload any supported asset type to Roblox: Audio (mp3/ogg/wav/flac), Decal (png/jpg/bmp/tga), Model (fbx/gltf/glb/rbxm/rbxmx), Animation (rbxm/rbxmx), or Video (mp4/mov). Decal supports ROBLOSECURITY cookie auth through the Asset Manager user-auth API and returns the direct Image asset ID, or ROBLOX_OPEN_CLOUD_API_KEY. All other types require Open Cloud API key with asset:write scope + creator ID. Audio: max 7 min, 100 uploads/month (ID-verified). Video: max 5 min, requires 13+ ID-verified.',
+    description: 'Use to publish a local audio, image, model, animation, or video file to Roblox as an asset.',
     inputSchema: {
       type: 'object',
       properties: {
         filePath: {
           type: 'string',
-          description: 'Absolute path to the file on disk'
+          description: 'Absolute path to the file on disk.'
         },
         assetType: {
           type: 'string',
           enum: ['Audio', 'Decal', 'Model', 'Animation', 'Video'],
-          description: 'Type of asset to upload. Must match the file format.'
+          description: 'Kind of asset, must match the file format.'
         },
         displayName: {
           type: 'string',
-          description: 'Display name for the asset (max 50 characters)'
+          description: 'Catalog display name, max 50 characters.'
         },
         description: {
           type: 'string',
-          description: 'Description for the asset (default: empty string)'
+          description: 'Catalog description, defaults to empty.'
         },
         userId: {
           type: 'string',
-          description: 'Roblox user ID for the asset creator. Overrides ROBLOX_CREATOR_USER_ID env var.'
+          description: 'Creator user ID, overrides ROBLOX_CREATOR_USER_ID.'
         },
         groupId: {
           type: 'string',
-          description: 'Roblox group ID for the asset creator. Overrides ROBLOX_CREATOR_GROUP_ID env var. Takes precedence over userId if both provided.'
+          description: 'Creator group ID, wins over userId when both are set.'
         }
       },
       required: ['filePath', 'assetType', 'displayName']
@@ -2471,22 +2115,22 @@ part(0,2,0,2,1,1,"b")`,
   {
     name: 'capture_screenshot',
     category: 'read',
-    description: 'Capture the Roblox Studio viewport at native resolution and return it as an image, plus a text line stating the exact pixel dimensions. Works in Edit mode and regular playtests (auto-detects a running client and captures the live play viewport). StudioTestService multiplayer client screenshots are currently blocked by Roblox temporary-texture process scoping; the tool returns a clear error in that case. The returned image is never downscaled, so its pixel grid is exactly the coordinate space simulate_mouse_input uses — read click positions straight off this image. For reading fine text/UI, use format="png" (lossless) or a higher quality; enlarging the Studio window raises resolution. Requires EditableImage API enabled (Game Settings > Security > "Allow Mesh / Image APIs") and the window to be visible.',
+    description: 'Use capture_screenshot to see the Studio viewport, in edit mode or during a running playtest.',
     inputSchema: {
       type: 'object',
       properties: {
         format: {
           type: 'string',
           enum: ['jpeg', 'png'],
-          description: 'Image format. "jpeg" (default) is compact and crisp at high quality. "png" is lossless — best for reading dense text/UI, but larger (a busy 3D scene may be big).'
+          description: 'jpeg is compact; png is lossless, best for dense text or UI.'
         },
         quality: {
           type: 'number',
-          description: 'JPEG quality 1-100 (default 92). Higher = sharper text, larger size. Ignored for png.'
+          description: 'JPEG quality 1-100 (default 92), ignored for png.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
     }
@@ -2496,35 +2140,35 @@ part(0,2,0,2,1,1,"b")`,
   {
     name: 'simulate_mouse_input',
     category: 'write',
-    description: 'Simulate a mouse click in the running game via UserInputService:CreateVirtualInput. Use during a playtest to click UI buttons, interact with objects, or aim. Fires real UserInputService input and activates GUI buttons. Coordinates are viewport pixels matching capture_screenshot (top-left is 0,0) — take a screenshot first to find positions. Auto-targets the running client; only works during a playtest. Note: only click/mouseDown/mouseUp are supported (the API has no mouse-move or scroll).',
+    description: 'Use simulate_mouse_input during a playtest to click UI buttons, objects, or aim at a viewport pixel.',
     inputSchema: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
           enum: ['click', 'mouseDown', 'mouseUp'],
-          description: 'Mouse action. "click" does mouseDown + short delay + mouseUp.'
+          description: 'click is a down, brief pause, then up.'
         },
         x: {
           type: 'number',
-          description: 'Viewport pixel X coordinate (as seen in capture_screenshot)'
+          description: 'Viewport pixel X, top-left origin, as seen in a screenshot.'
         },
         y: {
           type: 'number',
-          description: 'Viewport pixel Y coordinate (as seen in capture_screenshot)'
+          description: 'Viewport pixel Y, top-left origin, as seen in a screenshot.'
         },
         button: {
           type: 'string',
           enum: ['Left', 'Right', 'Middle'],
-          description: 'Mouse button (default: Left)'
+          description: 'Mouse button (default Left).'
         },
         target: {
           type: 'string',
-          description: 'Instance target. Defaults to the running playtest client (client-1) when present, else "edit". Override with "server", "client-2", etc.'
+          description: 'Peer to drive; defaults to the running playtest client.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['action', 'x', 'y']
@@ -2533,34 +2177,34 @@ part(0,2,0,2,1,1,"b")`,
   {
     name: 'simulate_keyboard_input',
     category: 'write',
-    description: 'Simulate keyboard input in the running game via UserInputService:CreateVirtualInput. Use during a playtest for character movement (W/A/S/D walks at full WalkSpeed with player controls intact), jumping (Space), interactions (E), or any key-driven action. Drives the real input pipeline so game scripts and control modules respond. For sustained movement use action="press" to hold and "release" to let go. Pass "text" instead of keyCode to type a string into the focused TextBox. Auto-targets the running client; only works during a playtest.',
+    description: 'Use simulate_keyboard_input during a playtest to walk, jump, fire key actions, or type text.',
     inputSchema: {
       type: 'object',
       properties: {
         keyCode: {
           type: 'string',
-          description: 'Enum.KeyCode name: "W", "A", "S", "D", "Space", "E", "F", "LeftShift", "LeftControl", "Return", "Tab", "Escape", "One", "Two", etc. Omit if using "text".'
+          description: 'Enum.KeyCode name such as "W" or "Space"; omit with text.'
         },
         action: {
           type: 'string',
           enum: ['press', 'release', 'tap'],
-          description: '"tap" (default) = press + wait + release. "press" = key down only. "release" = key up only.'
+          description: 'tap does both halves; press and release do one each.'
         },
         duration: {
           type: 'number',
-          description: 'Hold duration in seconds for "tap" action (default: 0.1). Use longer values for sustained input like walking.'
+          description: 'Hold time in seconds for tap (default 0.1).'
         },
         text: {
           type: 'string',
-          description: 'Type this string into the currently focused TextBox (uses SendTextInput). When provided, keyCode/action are ignored.'
+          description: 'Type into the focused TextBox; overrides keyCode/action.'
         },
         target: {
           type: 'string',
-          description: 'Instance target. Defaults to the running playtest client (client-1) when present, else "edit". Override with "server", "client-2", etc.'
+          description: 'Peer to drive; defaults to the running playtest client.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       }
     }
@@ -2570,21 +2214,21 @@ part(0,2,0,2,1,1,"b")`,
   {
     name: 'clone_object',
     category: 'write',
-    description: 'Clone an instance to a new parent location. Creates a deep copy of the instance and all its descendants.',
+    description: 'Use to copy an existing instance, with all of its descendants, under a different parent.',
     inputSchema: {
       type: 'object',
       properties: {
         instancePath: {
           type: 'string',
-          description: 'Canonical path of the instance to clone'
+          description: 'Canonical path of the instance to copy'
         },
         targetParentPath: {
           type: 'string',
-          description: 'Canonical path of the parent to place the clone under'
+          description: 'Canonical path of the parent that receives the copy'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['instancePath', 'targetParentPath']
@@ -2594,25 +2238,25 @@ part(0,2,0,2,1,1,"b")`,
   {
     name: 'get_descendants',
     category: 'read',
-    description: 'Get all descendants of an instance recursively with depth info. More efficient than repeated get_instance_children calls.',
+    description: 'Use to walk an entire subtree in one call instead of paging through children level by level.',
     inputSchema: {
       type: 'object',
       properties: {
         instancePath: {
           type: 'string',
-          description: 'Canonical root DataModel path'
+          description: 'Canonical path of the subtree root.'
         },
         maxDepth: {
           type: 'number',
-          description: 'Maximum recursion depth (default: 10)'
+          description: 'Recursion depth limit, default 10.'
         },
         classFilter: {
           type: 'string',
-          description: 'Only include instances of this class (uses IsA, so "BasePart" matches Part, MeshPart, etc.)'
+          description: 'Class to keep, matched with IsA so subclasses count.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['instancePath']
@@ -2621,21 +2265,21 @@ part(0,2,0,2,1,1,"b")`,
   {
     name: 'compare_instances',
     category: 'read',
-    description: 'Diff two instances by comparing their properties. Useful for debugging why a duplicate behaves differently.',
+    description: 'Use to diff the properties of two instances when a copy behaves differently from the original.',
     inputSchema: {
       type: 'object',
       properties: {
         instancePathA: {
           type: 'string',
-          description: 'First canonical DataModel path'
+          description: 'Canonical DataModel path to the first instance.'
         },
         instancePathB: {
           type: 'string',
-          description: 'Second canonical DataModel path'
+          description: 'Canonical DataModel path to the second instance.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['instancePathA', 'instancePathB']
@@ -2645,21 +2289,21 @@ part(0,2,0,2,1,1,"b")`,
   {
     name: 'bulk_set_attributes',
     category: 'write',
-    description: 'Set multiple attributes on an instance in a single call. More efficient than repeated set_attribute calls.',
+    description: 'Use to set many attributes on one instance in a single call.',
     inputSchema: {
       type: 'object',
       properties: {
         instancePath: {
           type: 'string',
-          description: 'Canonical DataModel path'
+          description: 'Canonical path of the instance to write to.'
         },
         attributes: {
           type: 'object',
-          description: 'Map of attribute names to values. Supports Vector3, Color3, UDim2 via _type convention.'
+          description: 'Name to value map, datatypes need an inline _type tag.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['instancePath', 'attributes']
@@ -2670,22 +2314,22 @@ part(0,2,0,2,1,1,"b")`,
   {
     name: 'get_memory_breakdown',
     category: 'read',
-    description: 'Read per-category memory usage by iterating Enum.DeveloperMemoryTag and calling Stats:GetMemoryUsageMbForTag per item (workaround for Stats:GetMemoryUsageMbAllCategories being gated by Capabilities: InternalTest and not callable from plugin context), plus Stats:GetTotalMemoryUsageMb for the rollup. target="all" (default) returns { peer: { total_mb, categories, timestamp } } for every connected peer except edit-proxy; single-peer targets return that peer\'s object directly. Optional tags whitelist filters to only those DeveloperMemoryTag entries; unknown tags come back with value 0 and are listed in unknown_tags so cross-version drift doesn\'t error. timestamp is Unix milliseconds (DateTime.now().UnixTimestampMillis). Per-peer MemoryTrackingEnabled=false surfaces as { error } on that peer only.',
+    description: 'Use to see how much memory each category is using on the connected peers.',
     inputSchema: {
       type: 'object',
       properties: {
         target: {
           type: 'string',
-          description: 'Peer to read from: "edit", "server", "client-N", or "all" (default).'
+          description: 'Peer to read: edit, server, client-N, or all (default).'
         },
         tags: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Optional DeveloperMemoryTag whitelist. Unknown tag names return 0 + unknown_tags list.'
+          description: 'DeveloperMemoryTag whitelist, omit to return every tag.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       }
     }
@@ -2693,32 +2337,32 @@ part(0,2,0,2,1,1,"b")`,
   {
     name: 'get_scene_analysis',
     category: 'read',
-    description: 'Read Roblox SceneAnalysisService data for attribution-focused performance analysis. Complements get_memory_breakdown: returns compact top-N entries for instance composition, script memory, unparented instances, triangle composition, animation memory, and audio memory. Requires the Studio Scene Analysis beta feature; if disabled, returns scene_analysis_not_enabled with betaFeatureRequired=true. target="all" (default) returns per-peer data; single-peer targets return that peer directly. raw=true includes the full nested Scene Analysis tree.',
+    description: 'Use to attribute memory and triangle counts to the instances, scripts, and assets in a place.',
     inputSchema: {
       type: 'object',
       properties: {
         mode: {
           type: 'string',
           enum: ['all', 'instance_composition', 'script_memory', 'unparented_instances', 'triangle_composition', 'animation_memory', 'audio_memory'],
-          description: 'Scene analysis mode to read. Defaults to "all".'
+          description: 'Which attribution report to read, defaults to all.'
         },
         target: {
           type: 'string',
-          description: 'Peer to read from: "edit", "server", "client-N", or "all" (default).'
+          description: 'Peer to read: edit, server, client-N, or all (default).'
         },
         topN: {
           type: 'number',
           minimum: 1,
           maximum: 100,
-          description: 'Number of flattened top entries to include per mode. Defaults to 10; plugin clamps to 1-100.'
+          description: 'Flattened entries per report, default 10, clamped 1-100.'
         },
         raw: {
           type: 'boolean',
-          description: 'Include the full nested SceneAnalysisService tree in each mode result. Defaults to false.'
+          description: 'Also include the full nested analysis tree, default false.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       }
     }
@@ -2728,27 +2372,27 @@ part(0,2,0,2,1,1,"b")`,
   {
     name: 'export_rbxm',
     category: 'read',
-    description: 'Serialize one or more instances to a .rbxm file on disk via SerializationService:SerializeInstancesAsync (engine v668+, PluginSecurity). Throws if any path resolves to nil, a service, or a non-creatable instance.',
+    description: 'Use to save instances from the place to a .rbxm file on disk for backup or reuse.',
     inputSchema: {
       type: 'object',
       properties: {
         instance_paths: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Canonical DataModel paths to serialize (e.g. ["game.Workspace.TestRig", "game.ServerStorage.Templates.NPC"])'
+          description: 'Canonical paths of the instances to serialize.'
         },
         output_path: {
           type: 'string',
-          description: 'Absolute filesystem path where the .rbxm should be written'
+          description: 'Absolute path of the .rbxm file to write.'
         },
         target: {
           type: 'string',
           enum: ['edit', 'server'],
-          description: 'Which DataModel to read from (default: "edit"). "server" serializes live runtime state during a playtest.'
+          description: 'Which DataModel to read, default edit.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['instance_paths', 'output_path']
@@ -2757,16 +2401,16 @@ part(0,2,0,2,1,1,"b")`,
   {
     name: 'import_rbxm',
     category: 'write',
-    description: 'Deserialize a .rbxm via SerializationService:DeserializeInstancesAsync (engine v668+, PluginSecurity) and parent the resulting instances under parent_path. All-or-nothing parenting: if any single instance fails to parent, every already-parented sibling is unparented and the call errors. Wrapped in ChangeHistoryService for edit target so one Ctrl+Z reverses the whole import.',
+    description: 'Use to load a .rbxm from disk, a URL, or inline bytes into the place under a chosen parent.',
     inputSchema: {
       type: 'object',
       properties: {
         source: {
           type: 'object',
-          description: 'Exactly one of { path }, { url }, or { base64 }. path = read from local disk; url = http(s) only, fetched by the MCP server process, capped at 50 MiB; base64 = raw bytes inline.',
+          description: 'Model bytes source, supply exactly one field.',
           properties: {
-            path: { type: 'string', description: 'Local .rbxm/.rbxmx path read by the MCP server process.' },
-            url: { type: 'string', description: 'http(s) URL fetched by the MCP server process; capped at 50 MiB.' },
+            path: { type: 'string', description: 'Local .rbxm/.rbxmx path read by the server process.' },
+            url: { type: 'string', description: 'http(s) URL fetched by the server, capped at 50 MiB.' },
             base64: { type: 'string', description: 'Raw model bytes inline, base64-encoded.' }
           },
           oneOf: [
@@ -2777,16 +2421,16 @@ part(0,2,0,2,1,1,"b")`,
         },
         parent_path: {
           type: 'string',
-          description: 'Canonical DataModel path of the Instance to parent imported instances under (e.g. "game.ServerStorage.Imported")'
+          description: 'Canonical path to parent the imported instances under.'
         },
         target: {
           type: 'string',
           enum: ['edit', 'server'],
-          description: 'Which DataModel to import into (default: "edit"). "server" parents into the live play-server DM.'
+          description: 'Which DataModel to import into, default edit.'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['source', 'parent_path']
@@ -2797,46 +2441,46 @@ part(0,2,0,2,1,1,"b")`,
   {
     name: 'find_and_replace_in_scripts',
     category: 'write',
-    description: 'Find and replace text across all scripts in the game. Supports literal and Lua pattern matching. Use dryRun to preview changes before applying. Pairs with grep_scripts for search-only operations. If any edited script is inside a Roblox Package, the response includes packageWarnings — surface them to the user (unmarked package changes can be reverted by package auto-update).',
+    description: 'Use to apply one text or pattern replacement across many scripts at once.',
     inputSchema: {
       type: 'object',
       properties: {
         pattern: {
           type: 'string',
-          description: 'Text or Lua pattern to find'
+          description: 'Text to find, or a Lua pattern when usePattern is true'
         },
         replacement: {
           type: 'string',
-          description: 'Replacement text. When usePattern is true, supports Lua captures (%1, %2, etc.).'
+          description: 'Replacement text; %1, %2 captures work in pattern mode'
         },
         caseSensitive: {
           type: 'boolean',
-          description: 'Case-sensitive matching (default: false). Must be true when usePattern is true.'
+          description: 'Case-sensitive matching, default false'
         },
         usePattern: {
           type: 'boolean',
-          description: 'Use Lua pattern matching instead of literal (default: false). Requires caseSensitive: true.'
+          description: 'Treat pattern as a Lua pattern, default false'
         },
         path: {
           type: 'string',
-          description: 'Limit scope to a subtree (e.g. "game.ServerScriptService")'
+          description: 'Subtree to limit scope to, defaults to whole place'
         },
         classFilter: {
           type: 'string',
           enum: ['Script', 'LocalScript', 'ModuleScript'],
-          description: 'Only search scripts of this class type'
+          description: 'Restrict to one script class, default all classes'
         },
         dryRun: {
           type: 'boolean',
-          description: 'Preview changes without applying them (default: false)'
+          description: 'Preview matches without writing, default false'
         },
         maxReplacements: {
           type: 'number',
-          description: 'Safety limit on total replacements (default: 1000)'
+          description: 'Safety cap on total replacements, default 1000'
         },
         instance_id: {
           type: 'string',
-          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+          description: 'Target Studio place; omit when only one is connected.'
         }
       },
       required: ['pattern', 'replacement']
@@ -2847,18 +2491,18 @@ part(0,2,0,2,1,1,"b")`,
   {
     name: 'get_roblox_skills',
     category: 'read',
-    description: 'List or retrieve Roblox-authored skills embedded in the locally installed Studio Assistant bundle. This reads the installed Assistant.rbxm directly, so it does not require a connected Studio place or Roblox\'s built-in MCP. Use action="list" to discover available names, then action="get" to retrieve the exact Markdown for one skill.',
+    description: 'Use to read Roblox-authored guidance shipped with the Studio Assistant bundle.',
     inputSchema: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
           enum: ['list', 'get'],
-          description: 'List installed built-in skills or get one skill document.'
+          description: 'Choose discovery of names or retrieval of one doc.'
         },
         name: {
           type: 'string',
-          description: 'Skill name returned by action="list". Required for action="get"; both canonical rbx-* and embedded source names are accepted.'
+          description: 'Skill name from a list call, canonical or source name.'
         }
       },
       required: ['action']
@@ -2869,22 +2513,22 @@ part(0,2,0,2,1,1,"b")`,
   {
     name: 'get_roblox_docs',
     category: 'read',
-    description: 'Fetch official Roblox engine API documentation as markdown from create.roblox.com. Call this BEFORE writing or editing code that uses an engine class, enum, datatype, or Luau library you are not fully certain about (e.g. ProximityPrompt, Enum.KeyCode, CFrame, TweenService) — the page includes the description, properties, methods, events, and code samples. Unresolved names return ranked recommendations from the official engine index, including pages in other doc categories. Results are cached, so repeat lookups are cheap. Very large pages are truncated with a section index; pass section (e.g. "Properties", "Methods", "Events") to read one section in full.',
+    description: 'Use before writing code against any engine class, enum, datatype, or Luau library you are unsure of.',
     inputSchema: {
       type: 'object',
       properties: {
         name: {
           type: 'string',
-          description: 'Exact PascalCase name of the class, enum, datatype, or library (e.g. "ProximityPrompt", "KeyCode", "CFrame", "table")'
+          description: 'Exact PascalCase API name, such as ProximityPrompt.'
         },
         doc_type: {
           type: 'string',
           enum: ['classes', 'enums', 'datatypes', 'libraries', 'globals'],
-          description: 'Documentation category (default: classes)'
+          description: 'Which doc category the name lives in, default classes.'
         },
         section: {
           type: 'string',
-          description: 'Optional "##"-level section to return instead of the whole page (e.g. "Description", "Properties", "Methods", "Events", "Code Samples")'
+          description: 'One \'##\' section to return instead of the full page.'
         }
       },
       required: ['name']
