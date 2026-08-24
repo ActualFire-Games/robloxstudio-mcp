@@ -7,10 +7,65 @@ import {
 import { DOC_CATEGORIES, fetchRobloxDoc, isDocCategory, DocNotFoundError } from './roblox-docs.js';
 
 export const TOOL_GUIDE_URI = 'robloxstudio://tool-guides';
+export const TOOL_GUIDE_SECTION_URI_PREFIX = 'robloxstudio://tool-guides/';
+
+export interface ToolGuideSection {
+  /** Stable URI slug derived from the heading, for example "debugging-and-profiling". */
+  slug: string;
+  /** The heading text as it appears in the guide. */
+  title: string;
+  /** Self-contained markdown: the guide preamble, this heading, and its body. */
+  markdown: string;
+}
+
+/** Derive a stable URI slug from a "## " heading. */
+function toolGuideSlug(title: string): string {
+  return title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+/**
+ * Split the guide on its "## " headings so a client can read one section instead of the whole
+ * document. The guide is large enough that fetching all of it to answer one question wastes
+ * most of what it costs. The preamble above the first heading is repeated into every section
+ * so each one still explains what it is when read on its own.
+ */
+function parseToolGuideSections(markdown: string): ToolGuideSection[] {
+  const lines = markdown.split('\n');
+  const firstHeading = lines.findIndex((line) => line.startsWith('## '));
+  if (firstHeading < 0) return [];
+  const preamble = lines.slice(0, firstHeading).join('\n').trimEnd();
+
+  const sections: ToolGuideSection[] = [];
+  let title: string | undefined;
+  let body: string[] = [];
+
+  const flush = () => {
+    if (title === undefined) return;
+    sections.push({
+      slug: toolGuideSlug(title),
+      title,
+      markdown: `${preamble}\n\n## ${title}\n${body.join('\n').trimEnd()}\n`,
+    });
+  };
+
+  for (const line of lines.slice(firstHeading)) {
+    if (line.startsWith('## ')) {
+      flush();
+      title = line.slice(3).trim();
+      body = [];
+      continue;
+    }
+    body.push(line);
+  }
+  flush();
+  return sections;
+}
 
 export const TOOL_GUIDE_MARKDOWN = `# Roblox Studio MCP tool guide
 
 Tool descriptions explain selection. Input schemas explain arguments. This guide holds the shared workflows, value encodings, defaults, limits, and safety notes that do not fit in a short description. When a tool behaves in a way its description does not explain, the answer is here.
+
+Every heading below is also readable on its own at robloxstudio://tool-guides/{section}, where {section} is the heading lowercased with spaces as hyphens, for example robloxstudio://tool-guides/debugging-and-profiling. Prefer one section over this whole document when you already know the topic.
 
 ## Connection and paths
 
@@ -307,6 +362,14 @@ manage_instance can launch, inspect, and close Studio or list published place re
 - Call action="list" first to discover the available skill names, then action="get" with name for the exact Markdown. Both the canonical rbx-* names and the embedded source names are accepted.
 `;
 
+/** The guide split by heading, so clients can read one section instead of all of it. */
+export const TOOL_GUIDE_SECTIONS: readonly ToolGuideSection[] = parseToolGuideSections(TOOL_GUIDE_MARKDOWN);
+
+/** Look up one guide section by its URI slug. */
+export function findToolGuideSection(slug: string): ToolGuideSection | undefined {
+  return TOOL_GUIDE_SECTIONS.find((section) => section.slug === slug);
+}
+
 /** Official Roblox reference templates shared by the HTTP and stdio servers. */
 export function registerResourceHandlers(server: McpServer): void {
   server.registerResource(
@@ -323,6 +386,49 @@ export function registerResourceHandlers(server: McpServer): void {
         text: TOOL_GUIDE_MARKDOWN,
       }],
     }),
+  );
+
+  // The whole guide is large, so each heading is also addressable on its own. Clients that
+  // need one topic can read that section instead of paying for the entire document.
+  server.registerResource(
+    'Roblox Studio MCP tool guide section',
+    new ResourceTemplate(`${TOOL_GUIDE_SECTION_URI_PREFIX}{section}`, {
+      list: () => ({
+        resources: TOOL_GUIDE_SECTIONS.map((section) => ({
+          uri: `${TOOL_GUIDE_SECTION_URI_PREFIX}${section.slug}`,
+          name: `Tool guide: ${section.title}`,
+          description: `The "${section.title}" section of the Roblox Studio MCP tool guide.`,
+          mimeType: 'text/markdown',
+        })),
+      }),
+      complete: {
+        section: (value) => TOOL_GUIDE_SECTIONS
+          .map((section) => section.slug)
+          .filter((slug) => slug.startsWith(value.toLowerCase())),
+      },
+    }),
+    {
+      description: 'One section of the Roblox Studio MCP tool guide, addressed by its heading slug.',
+      mimeType: 'text/markdown',
+    },
+    async (resourceUrl, variables) => {
+      const raw = variables.section;
+      const slug = Array.isArray(raw) ? raw[0] : raw;
+      const section = typeof slug === 'string' ? findToolGuideSection(slug) : undefined;
+      if (!section) {
+        throw new ProtocolError(
+          ProtocolErrorCode.InvalidParams,
+          `Resource ${resourceUrl.href} not found. Valid tool guide sections: ${TOOL_GUIDE_SECTIONS.map((entry) => entry.slug).join(', ')}.`,
+        );
+      }
+      return {
+        contents: [{
+          uri: resourceUrl.href,
+          mimeType: 'text/markdown',
+          text: section.markdown,
+        }],
+      };
+    },
   );
 
   const templates = [

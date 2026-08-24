@@ -57,8 +57,12 @@ client truncated any more. Change the budget only as an explicit API decision.
   generated from the tools exposed by each server edition, so they never name an
   unavailable tool.
 - Detailed workflows and safety notes are available on demand at
-  `robloxstudio://tool-guides`. Official engine references remain available through
-  the `robloxdocs://` resource templates.
+  `robloxstudio://tool-guides`. Because that guide is large, every heading is also
+  addressable on its own at `robloxstudio://tool-guides/{section}`, where the slug
+  is the heading lowercased with spaces as hyphens. Sections are enumerated in
+  `resources/list` and the slug supports completion, so a client that needs one
+  topic reads a few KB instead of the whole document. Official engine references
+  remain available through the `robloxdocs://` resource templates.
 
 The server advertises shared instructions once. Clients read the detailed tool
 guide only when needed, and the guide is not part of the tool catalog.

@@ -282,7 +282,10 @@ export function serverInstructions(definitions: readonly ToolDefinition[]): stri
     instructions.push('Use get_roblox_docs instead of guessing unfamiliar engine or Luau APIs.');
   }
 
-  instructions.push('Read robloxstudio://tool-guides for detailed workflows and safety notes.');
+  instructions.push(
+    'Read robloxstudio://tool-guides for detailed workflows and safety notes, '
+    + 'or robloxstudio://tool-guides/{section} to read one section instead of the whole guide.',
+  );
   return instructions.join(' ');
 }
 

@@ -36,6 +36,10 @@ the conventions below.
   offline).
 - Asset/marketplace tools (`search_assets`, `get_asset_details`, …) need `ROBLOX_OPEN_CLOUD_API_KEY`
   or `ROBLOSECURITY` env vars; without them they return a clear env error.
+- **Tool guide resource.** `robloxstudio://tool-guides` holds the workflows, limits, and safety
+  notes that no longer fit in the short tool descriptions. It is large, so prefer one section:
+  `robloxstudio://tool-guides/{section}` (heading lowercased, spaces as hyphens), e.g.
+  `robloxstudio://tool-guides/debugging-and-profiling`. Sections are listed in `resources/list`.
 - **Multiple Claude sessions are safe**: the first server process is primary on port 58741; later ones
   run as transparent proxies forwarding to it.
 
