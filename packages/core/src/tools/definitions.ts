@@ -1507,7 +1507,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'capture_micro_profiler',
     category: 'read',
-    description: 'Capture one short Roblox MicroProfiler sample on a running server or client peer using LibMP and return a structured CPU-time attribution dataset. Use this when the performance question is "where is the frame time going?" across scripts, physics, render, network, jobs, scheduler, GC, and engine timers. The primary data is top_groups/top_timers sorted by inclusive_us, exclusive-sorted companion lists, top_threads, top_call_edges, frame_summary, and analysis_window/data_quality so an agent can tell whether a result is steady, spiky, thread-bound, wrapper-heavy, or truncated. For baseline comparison, first capture an empty baseplate/control with the same target/settings and summary_output_path, then capture the game with baseline_path pointing at that saved JSON; saved summaries include a compact comparison_index so baseline_comparison can compare full compact aggregates instead of only visible top rows. Pass baseline inline when the previous capture is already in context. Times are reported in microseconds by converting LibMP MicroProfiler nanosecond ticks; inclusive_us is cumulative nested timer time and can overlap across timers/threads, so do not sum rows as total frame time. *_per_s fields are normalized by analysis_window.analysis_duration_us, not requested duration_ms. pct_of_analyzed_wall can exceed 100 when work overlaps. focus can restrict to script, physics, render, network, or jobs. include_idle defaults false so Sleep/idle noise is omitted. max_events bounds iterator work; event_limit_hit and partial_reasons explain when rankings are useful but partial, so narrow focus/filter or raise max_events for deeper analysis. recommended_tools is intentionally brief; the main purpose is digestible attribution data, not an agent diagnosis.',
+    description: 'Capture one short Roblox MicroProfiler sample on a running server or client peer using LibMP and return a structured CPU-time attribution dataset. Use this when the performance question is "where is the frame time going?" across scripts, physics, render, network, jobs, scheduler, GC, and engine timers. The primary data is top_groups/top_timers sorted by inclusive_us, exclusive-sorted companion lists, top_threads, top_call_edges, frame_summary, and analysis_window/data_quality so an agent can tell whether a result is steady, spiky, thread-bound, wrapper-heavy, or truncated. For baseline comparison, first capture an empty baseplate/control with the same target/settings and summary_output_path, then capture the game with baseline_path pointing at that saved JSON; saved summaries include a compact comparison_index so baseline_comparison can compare full compact aggregates instead of only visible top rows. Pass baseline inline when the previous capture is already in context. Times are reported in microseconds by converting LibMP MicroProfiler nanosecond ticks; inclusive_us is cumulative nested timer time and can overlap across timers/threads, so do not sum rows as total frame time. *_per_s fields are normalized by analysis_window.analysis_duration_us, not requested duration_ms. pct_of_analyzed_wall can exceed 100 when work overlaps. focus can restrict to script, physics, render, network, or jobs. include_idle defaults false so Sleep/idle noise is omitted. max_events bounds iterator work; event_limit_hit and partial_reasons explain when rankings are useful but partial, so narrow focus/filter or raise max_events for deeper analysis. recommended_tools is intentionally brief; the main purpose is digestible attribution data, not an agent diagnosis. frame_breakdown adds per-frame top timers by exclusive time for the longest frames in the analyzed window plus the trigger frame, so a single spike frame can be read directly instead of inferred from window aggregates. Besides the default blocking capture, action="arm" starts a triggered capture and returns a capture_id immediately: the plugin enables the profiler and watches every Heartbeat for the trigger (frame_time threshold, attribute change, or log substring), snapshots post_trigger_frames later, and action="collect" polls that capture_id (status armed|triggered|done|timed_out|cancelled|failed) and returns the analysis once it is done. action="cancel" aborts an armed capture; action="analyze" re-runs the analysis over an already stored snapshot (last 3 captures, retained 10 minutes) with different focus/filter/include_sections and no new capture. For triggered captures the analysis window is [trigger_frame_id - frames_before, trigger_frame_id + post_trigger_frames] and is walked from the trigger frame first so max_events cannot cut off the spike itself. To keep replies small the inline response carries frame_summary, frame_breakdown, top_groups, top_timers, and data_quality; ask for top_groups_by_exclusive, top_timers_by_exclusive, top_threads, or top_call_edges through include_sections (or "all"), and sections_omitted names whatever was trimmed. summary_output_path always receives the full untrimmed response.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1515,6 +1515,84 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           type: 'string',
           pattern: '^(server|client-[0-9]+)$',
           description: 'Runtime peer to profile: "server" (default) or "client-N". Use get_connected_instances to discover available runtime roles.'
+        },
+        action: {
+          type: 'string',
+          enum: ['capture', 'arm', 'collect', 'cancel', 'analyze'],
+          default: 'capture',
+          description: 'What this call does. "capture" (default) blocks for duration_ms and returns the analysis of the last frame_window frames. "arm" turns the profiler and capture on, starts a Heartbeat watcher for the trigger, and returns a capture_id immediately without blocking. "collect" polls that capture_id and returns status armed|triggered|done|timed_out|cancelled|failed, with the full analysis once status is done. "cancel" stops an armed or triggered capture and discards its snapshot. "analyze" re-runs the analysis over a stored snapshot (last 3 captures, kept 10 minutes) with the current settings, so a different focus/filter/include_sections needs no re-capture.'
+        },
+        capture_id: {
+          type: 'string',
+          description: 'Capture returned by action="capture"/"arm". Required for action="collect", "cancel", and "analyze". When target is omitted the server routes these calls back to the peer the capture was armed on.'
+        },
+        trigger: {
+          type: 'object',
+          description: 'Trigger condition for action="arm". Pick one kind and set its fields.',
+          properties: {
+            kind: {
+              type: 'string',
+              enum: ['frame_time', 'attribute', 'log'],
+              description: 'Trigger type. "frame_time" is the main one: fire on the first complete frame at or above threshold_ms. "attribute" fires when an attribute on an instance changes to a truthy value (or to value when given), which lets a server script trigger a capture on a client peer. "log" fires on a LogService message containing substring, handy in single-player playtests where the client log reflects both peers.'
+            },
+            threshold_ms: {
+              type: 'number',
+              minimum: 1,
+              maximum: 10000,
+              description: 'kind="frame_time": fire on the first new complete, non-paused frame whose CPU frame time is at least this many milliseconds.'
+            },
+            instance: {
+              type: 'string',
+              description: 'kind="attribute": path to the instance holding the attribute, such as game.ReplicatedStorage.ProfilerFlags.'
+            },
+            name: {
+              type: 'string',
+              description: 'kind="attribute": attribute name to watch on that instance.'
+            },
+            value: {
+              description: 'kind="attribute": optional exact value to wait for. Omit to fire on any value that is not nil or false.'
+            },
+            substring: {
+              type: 'string',
+              description: 'kind="log": plain (non-pattern) substring matched against LogService output.'
+            }
+          }
+        },
+        arm_timeout_ms: {
+          type: 'number',
+          default: 60000,
+          minimum: 1000,
+          maximum: 300000,
+          description: 'How long an armed capture waits for its trigger before giving up with status timed_out. Defaults to 60000.'
+        },
+        frames_before: {
+          type: 'number',
+          default: 8,
+          minimum: 0,
+          maximum: 200,
+          description: 'Frames before the trigger frame to include in the analysis window. Defaults to 8. frames_before + post_trigger_frames must stay at or below 240 because the MicroProfiler ring holds 256 frames; frames_before is reduced to fit when it does not.'
+        },
+        post_trigger_frames: {
+          type: 'number',
+          default: 30,
+          minimum: 0,
+          maximum: 200,
+          description: 'Frames captured after the trigger frame before the snapshot is taken, and included in the analysis window. Defaults to 30. frames_before + post_trigger_frames must stay at or below 240 because the ring holds 256 frames.'
+        },
+        max_frame_breakdowns: {
+          type: 'number',
+          default: 3,
+          minimum: 0,
+          maximum: 10,
+          description: 'How many of the longest frames in the window get their own frame_breakdown row of top timers by exclusive time. Defaults to 3; use 0 to omit frame_breakdown. The trigger frame is always added when it is not already among them.'
+        },
+        include_sections: {
+          type: 'array',
+          items: {
+            type: 'string',
+            enum: ['top_groups_by_exclusive', 'top_timers_by_exclusive', 'top_threads', 'top_call_edges', 'all']
+          },
+          description: 'Extra analysis sections to keep in the inline response. The default inline sections are frame_summary, frame_breakdown, top_groups, top_timers, and data_quality; anything else is trimmed and listed in sections_omitted. Use "all" to keep every section. summary_output_path always receives the full response regardless of this setting.'
         },
         duration_ms: {
           type: 'number',

@@ -2355,6 +2355,7 @@ describe('Smoke', () => {
       ok: true,
       raw_snapshot_base64: Buffer.from('micro').toString('base64'),
       duration_ms: 250,
+      frame_summary: { frames: 12, avg_frame_us: 8000 },
       top_timers: [{ group: 'Script', name: '$Script', total_us: 280, exclusive_us: 90, count: 3 }],
       top_groups: [{ group: 'Script', total_us: 300, exclusive_us: 100, count: 3 }],
       counts: { events_sampled: 0 },
@@ -2368,6 +2369,7 @@ describe('Smoke', () => {
       output_path: path.resolve(outputPath),
       summary_output_path: path.resolve(summaryOutputPath),
       duration_ms: 250,
+      frame_summary: { frames: 12, avg_frame_us: 8000 },
       top_timers: [{ group: 'Script', name: '$Script', total_us: 280, exclusive_us: 90, count: 3 }],
       top_groups: [{ group: 'Script', total_us: 300, exclusive_us: 100, count: 3 }],
       counts: { events_sampled: 0 },
@@ -2435,6 +2437,245 @@ describe('Smoke', () => {
     expect(summary.baseline_comparison.groups[0].delta_inclusive_us_per_s).toBe(800);
     fs.rmSync(outputPath, { force: true });
     fs.rmSync(summaryOutputPath, { force: true });
+  });
+
+  test('capture_micro_profiler arm forwards trigger settings and returns the status body untouched', async () => {
+    const bridge = new BridgeService();
+    const tools = new RobloxStudioTools(bridge);
+    bridge.registerInstance(READY);
+    bridge.registerInstance({
+      pluginSessionId: 'server-1',
+      instanceId: 'place:test',
+      role: 'server',
+      placeId: 0,
+      placeName: 'TestPlace',
+      dataModelName: 'Game',
+      isRunning: true,
+    });
+    const summaryOutputPath = path.join(os.tmpdir(), `rsmcp-micro-profiler-arm-${Date.now()}.json`);
+
+    const resultPromise = tools.captureMicroProfiler('server', {
+      action: 'arm',
+      trigger: { kind: 'frame_time', threshold_ms: 40 },
+      arm_timeout_ms: 30000,
+      frames_before: 12,
+      post_trigger_frames: 20,
+      max_frame_breakdowns: 2,
+      summary_output_path: summaryOutputPath,
+    }, 'place:test');
+
+    const pending = bridge.getPendingRequest('place:test', 'server');
+    expect(pending?.request).toMatchObject({
+      endpoint: '/api/capture-micro-profiler',
+      data: {
+        action: 'arm',
+        trigger: { kind: 'frame_time', threshold_ms: 40 },
+        arm_timeout_ms: 30000,
+        frames_before: 12,
+        post_trigger_frames: 20,
+        max_frame_breakdowns: 2,
+        __mcp_instance_id: 'place:test',
+        __mcp_target_role: 'server',
+      },
+    });
+    bridge.resolveRequest(pending!.requestId, {
+      ok: true,
+      action: 'arm',
+      capture_id: 'mp_server_1_a1b2c3d4',
+      status: 'armed',
+      arm_timeout_ms: 30000,
+      frames_before: 12,
+      post_trigger_frames: 20,
+    });
+
+    const result = await resultPromise;
+    const body = JSON.parse(result.content[0].text);
+    expect(body).toEqual({
+      target: 'server',
+      ok: true,
+      action: 'arm',
+      capture_id: 'mp_server_1_a1b2c3d4',
+      status: 'armed',
+      arm_timeout_ms: 30000,
+      frames_before: 12,
+      post_trigger_frames: 20,
+    });
+    expect(fs.existsSync(summaryOutputPath)).toBe(false);
+    fs.rmSync(summaryOutputPath, { force: true });
+  });
+
+  test('capture_micro_profiler collect reuses the armed peer route and trims optional sections', async () => {
+    const bridge = new BridgeService();
+    const tools = new RobloxStudioTools(bridge);
+    bridge.registerInstance(READY);
+    bridge.registerInstance({
+      pluginSessionId: 'client-1',
+      instanceId: 'place:test',
+      role: 'client',
+      placeId: 0,
+      placeName: 'TestPlace',
+      dataModelName: 'Game',
+      isRunning: true,
+    });
+
+    const armPromise = tools.captureMicroProfiler('client-1', {
+      action: 'arm',
+      trigger: { kind: 'log', substring: 'spike' },
+    }, 'place:test');
+    const armPending = bridge.getPendingRequest('place:test', 'client-1');
+    bridge.resolveRequest(armPending!.requestId, {
+      ok: true,
+      action: 'arm',
+      capture_id: 'mp_client_1_2_deadbeef',
+      status: 'armed',
+    });
+    await armPromise;
+
+    const summaryOutputPath = path.join(os.tmpdir(), `rsmcp-micro-profiler-collect-${Date.now()}.json`);
+    const collectPromise = tools.captureMicroProfiler(undefined, {
+      action: 'collect',
+      capture_id: 'mp_client_1_2_deadbeef',
+      summary_output_path: summaryOutputPath,
+    });
+
+    const collectPending = bridge.getPendingRequest('place:test', 'client-1');
+    expect(collectPending?.request).toMatchObject({
+      endpoint: '/api/capture-micro-profiler',
+      data: {
+        action: 'collect',
+        capture_id: 'mp_client_1_2_deadbeef',
+        __mcp_instance_id: 'place:test',
+        __mcp_target_role: 'client-1',
+      },
+    });
+    bridge.resolveRequest(collectPending!.requestId, {
+      ok: true,
+      action: 'collect',
+      capture_id: 'mp_client_1_2_deadbeef',
+      status: 'done',
+      kind: 'triggered',
+      frame_summary: { frames: 39, max_frame_us: 41000 },
+      frame_breakdown: [{ frame_id: 502, duration_us: 41000, timer_count: 4, top_timers: [] }],
+      top_groups: [{ group: 'Script', inclusive_us: 300, exclusive_us: 100, count: 3 }],
+      top_timers: [{ group: 'Script', name: '$Script', inclusive_us: 280, exclusive_us: 90, count: 3 }],
+      top_groups_by_exclusive: [{ group: 'Script', inclusive_us: 300, exclusive_us: 100, count: 3 }],
+      top_timers_by_exclusive: [{ group: 'Script', name: '$Script', inclusive_us: 280, exclusive_us: 90, count: 3 }],
+      top_threads: [{ thread_id: 1, thread_name: 'Main', inclusive_us: 300 }],
+      top_call_edges: [{ parent: { group: 'Script', name: '$Script' }, child: { group: 'Script', name: 'Update' }, inclusive_us: 120 }],
+      data_quality: { event_limit_hit: false },
+    });
+
+    const body = JSON.parse((await collectPromise).content[0].text);
+    expect(body.target).toBe('client-1');
+    expect(body.status).toBe('done');
+    expect(body.frame_breakdown).toEqual([{ frame_id: 502, duration_us: 41000, timer_count: 4, top_timers: [] }]);
+    expect(body).not.toHaveProperty('top_groups_by_exclusive');
+    expect(body).not.toHaveProperty('top_timers_by_exclusive');
+    expect(body).not.toHaveProperty('top_threads');
+    expect(body).not.toHaveProperty('top_call_edges');
+    expect(body.sections_omitted).toEqual([
+      'top_groups_by_exclusive',
+      'top_timers_by_exclusive',
+      'top_threads',
+      'top_call_edges',
+    ]);
+
+    const summary = JSON.parse(fs.readFileSync(summaryOutputPath, 'utf8'));
+    expect(summary.top_groups_by_exclusive).toHaveLength(1);
+    expect(summary.top_timers_by_exclusive).toHaveLength(1);
+    expect(summary.top_threads).toHaveLength(1);
+    expect(summary.top_call_edges).toHaveLength(1);
+    expect(summary).not.toHaveProperty('sections_omitted');
+    fs.rmSync(summaryOutputPath, { force: true });
+  });
+
+  test('capture_micro_profiler include_sections keeps requested sections and rejects unknown ones', async () => {
+    const bridge = new BridgeService();
+    const tools = new RobloxStudioTools(bridge);
+    bridge.registerInstance(READY);
+    bridge.registerInstance({
+      pluginSessionId: 'server-1',
+      instanceId: 'place:test',
+      role: 'server',
+      placeId: 0,
+      placeName: 'TestPlace',
+      dataModelName: 'Game',
+      isRunning: true,
+    });
+
+    const doneBody = () => ({
+      ok: true,
+      action: 'analyze',
+      capture_id: 'mp_server_3_0f0f0f0f',
+      status: 'done',
+      frame_summary: { frames: 39 },
+      top_groups: [{ group: 'Script', inclusive_us: 300 }],
+      top_timers: [{ group: 'Script', name: '$Script', inclusive_us: 280 }],
+      top_groups_by_exclusive: [{ group: 'Script', exclusive_us: 100 }],
+      top_timers_by_exclusive: [{ group: 'Script', name: '$Script', exclusive_us: 90 }],
+      top_threads: [{ thread_id: 1, thread_name: 'Main' }],
+      top_call_edges: [{ parent: { name: '$Script' }, child: { name: 'Update' } }],
+    });
+
+    const keepEdgesPromise = tools.captureMicroProfiler('server', {
+      action: 'analyze',
+      capture_id: 'mp_server_3_0f0f0f0f',
+      include_sections: ['top_call_edges'],
+    }, 'place:test');
+    const keepEdgesPending = bridge.getPendingRequest('place:test', 'server');
+    expect(keepEdgesPending?.request.data).not.toHaveProperty('include_sections');
+    bridge.resolveRequest(keepEdgesPending!.requestId, doneBody());
+    const keepEdgesResult = JSON.parse((await keepEdgesPromise).content[0].text);
+    expect(keepEdgesResult.top_call_edges).toHaveLength(1);
+    expect(keepEdgesResult).not.toHaveProperty('top_threads');
+    expect(keepEdgesResult.sections_omitted).toEqual([
+      'top_groups_by_exclusive',
+      'top_timers_by_exclusive',
+      'top_threads',
+    ]);
+
+    const keepAllPromise = tools.captureMicroProfiler('server', {
+      action: 'analyze',
+      capture_id: 'mp_server_3_0f0f0f0f',
+      include_sections: ['all'],
+    }, 'place:test');
+    const keepAllPending = bridge.getPendingRequest('place:test', 'server');
+    bridge.resolveRequest(keepAllPending!.requestId, doneBody());
+    const keepAllResult = JSON.parse((await keepAllPromise).content[0].text);
+    expect(keepAllResult.top_groups_by_exclusive).toHaveLength(1);
+    expect(keepAllResult.top_timers_by_exclusive).toHaveLength(1);
+    expect(keepAllResult.top_threads).toHaveLength(1);
+    expect(keepAllResult.top_call_edges).toHaveLength(1);
+    expect(keepAllResult).not.toHaveProperty('sections_omitted');
+
+    await expect(tools.captureMicroProfiler('server', {
+      action: 'analyze',
+      capture_id: 'mp_server_3_0f0f0f0f',
+      include_sections: ['top_lies'],
+    }, 'place:test')).rejects.toThrow(/include_sections entries must be one of/);
+  });
+
+  test('capture_micro_profiler rejects an unknown action and a collect without capture_id', async () => {
+    const bridge = new BridgeService();
+    const tools = new RobloxStudioTools(bridge);
+    bridge.registerInstance(READY);
+    bridge.registerInstance({
+      pluginSessionId: 'server-1',
+      instanceId: 'place:test',
+      role: 'server',
+      placeId: 0,
+      placeName: 'TestPlace',
+      dataModelName: 'Game',
+      isRunning: true,
+    });
+
+    await expect(tools.captureMicroProfiler('server', {
+      action: 'collect',
+    }, 'place:test')).rejects.toThrow(/requires capture_id/);
+
+    await expect(tools.captureMicroProfiler('server', {
+      action: 'sniff',
+    }, 'place:test')).rejects.toThrow(/action must be one of/);
   });
 
   test('generate_model routes to edit context and returns brief model path response', async () => {

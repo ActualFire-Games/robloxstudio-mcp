@@ -441,28 +441,36 @@ describe('Tool schema compatibility', () => {
     const schema = tool!.inputSchema as { properties?: Record<string, unknown> };
     const props = schema.properties ?? {};
     expect(Object.keys(props).sort()).toEqual([
+      'action',
+      'arm_timeout_ms',
       'baseline',
       'baseline_label',
       'baseline_path',
+      'capture_id',
       'current_label',
       'duration_ms',
       'filter',
       'focus',
       'frame_window',
+      'frames_before',
       'include_comparison_index',
       'include_gpu',
       'include_idle',
+      'include_sections',
       'instance_id',
       'max_comparison_rows',
       'max_events',
+      'max_frame_breakdowns',
       'max_groups',
       'max_related_timers',
       'max_timers',
       'max_timers_per_group',
       'min_total_us',
       'output_path',
+      'post_trigger_frames',
       'summary_output_path',
       'target',
+      'trigger',
     ].sort());
     expect(tool!.category).toBe('read');
     expect(tool!.description).toContain('MicroProfiler');
@@ -502,6 +510,45 @@ describe('Tool schema compatibility', () => {
     expect((props.output_path as { description?: string }).description).toContain('raw MicroProfiler snapshot bytes');
     expect((props.summary_output_path as { description?: string }).description).toContain('empty-baseplate');
     expect((props.baseline_path as { description?: string }).description).toContain('current minus baseline');
+    expect(tool!.description).toContain('frame_breakdown');
+    expect(tool!.description).toContain('capture_id');
+    expect((props.action as { enum?: string[]; default?: string }).enum).toEqual(['capture', 'arm', 'collect', 'cancel', 'analyze']);
+    expect((props.action as { enum?: string[]; default?: string }).default).toBe('capture');
+    expect((props.capture_id as { type?: string }).type).toBe('string');
+    const trigger = props.trigger as { type?: string; properties?: Record<string, unknown> };
+    expect(trigger.type).toBe('object');
+    expect(Object.keys(trigger.properties ?? {}).sort()).toEqual([
+      'instance',
+      'kind',
+      'name',
+      'substring',
+      'threshold_ms',
+      'value',
+    ].sort());
+    expect((trigger.properties!.kind as { enum?: string[] }).enum).toEqual(['frame_time', 'attribute', 'log']);
+    expect((trigger.properties!.threshold_ms as { minimum?: number; maximum?: number }).minimum).toBe(1);
+    expect((trigger.properties!.threshold_ms as { minimum?: number; maximum?: number }).maximum).toBe(10000);
+    expect((props.arm_timeout_ms as { default?: number; minimum?: number; maximum?: number }).default).toBe(60000);
+    expect((props.arm_timeout_ms as { default?: number; minimum?: number; maximum?: number }).minimum).toBe(1000);
+    expect((props.arm_timeout_ms as { default?: number; minimum?: number; maximum?: number }).maximum).toBe(300000);
+    expect((props.frames_before as { default?: number; minimum?: number; maximum?: number }).default).toBe(8);
+    expect((props.frames_before as { default?: number; minimum?: number; maximum?: number }).minimum).toBe(0);
+    expect((props.frames_before as { default?: number; minimum?: number; maximum?: number }).maximum).toBe(200);
+    expect((props.post_trigger_frames as { default?: number; minimum?: number; maximum?: number }).default).toBe(30);
+    expect((props.post_trigger_frames as { default?: number; minimum?: number; maximum?: number }).minimum).toBe(0);
+    expect((props.post_trigger_frames as { default?: number; minimum?: number; maximum?: number }).maximum).toBe(200);
+    expect((props.post_trigger_frames as { description?: string }).description).toContain('240');
+    expect((props.max_frame_breakdowns as { default?: number; minimum?: number; maximum?: number }).default).toBe(3);
+    expect((props.max_frame_breakdowns as { default?: number; minimum?: number; maximum?: number }).minimum).toBe(0);
+    expect((props.max_frame_breakdowns as { default?: number; minimum?: number; maximum?: number }).maximum).toBe(10);
+    expect((props.include_sections as { type?: string }).type).toBe('array');
+    expect((props.include_sections as { items?: { enum?: string[] } }).items?.enum).toEqual([
+      'top_groups_by_exclusive',
+      'top_timers_by_exclusive',
+      'top_threads',
+      'top_call_edges',
+      'all',
+    ]);
   });
 
   test('generate_model schema exposes a brief model generation primitive', () => {

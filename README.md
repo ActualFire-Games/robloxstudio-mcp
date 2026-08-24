@@ -18,7 +18,7 @@
 - `manage_instance`: launch and close Studio windows, open blank baseplates, local files, or specific published place revisions. Launches return an opaque `launch_id`, native PID, source path, and `launching | connected | exited | failed` lifecycle state, so asynchronous and failed launches remain inspectable and closable before a plugin connects.
 
 **Profiling & performance**
-- `capture_script_profiler` / `capture_micro_profiler`: CPU hotspots with debug labels and microsecond timing, on server or client.
+- `capture_script_profiler` / `capture_micro_profiler`: CPU hotspots with debug labels and microsecond timing, on server or client. `capture_micro_profiler` also does triggered captures (`action:"arm"` with a frame-time, attribute, or log trigger, then poll `action:"collect"`) so a spike is snapshotted the moment it happens, reports `frame_breakdown` (per-frame top timers for the longest frames and the trigger frame), and can re-slice a stored snapshot with `action:"analyze"` without re-capturing.
 - `get_memory_breakdown` / `get_scene_analysis`: memory and scene attribution per peer.
 
 **Editing & automation at scale**

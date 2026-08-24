@@ -366,6 +366,20 @@ function nestedRecord(row: Record<string, unknown> | undefined, key: string): Re
   return asRecord(row?.[key]);
 }
 
+const MICRO_PROFILER_ACTIONS = ['capture', 'arm', 'collect', 'cancel', 'analyze'] as const;
+type MicroProfilerAction = typeof MICRO_PROFILER_ACTIONS[number];
+// collect/cancel/analyze act on a capture that already exists on a specific peer.
+const MICRO_PROFILER_CAPTURE_ID_ACTIONS: MicroProfilerAction[] = ['collect', 'cancel', 'analyze'];
+// Sections the inline response drops unless include_sections asks for them; summaries keep everything.
+const MICRO_PROFILER_OPTIONAL_SECTIONS = [
+  'top_groups_by_exclusive',
+  'top_timers_by_exclusive',
+  'top_threads',
+  'top_call_edges',
+] as const;
+const MICRO_PROFILER_SECTION_VALUES: string[] = [...MICRO_PROFILER_OPTIONAL_SECTIONS, 'all'];
+const MAX_MICRO_PROFILER_ROUTES = 50;
+
 function loadMicroProfilerBaseline(source: unknown, sourcePath: unknown): Record<string, unknown> | undefined {
   if (source !== undefined) {
     const inline = asRecord(source);
@@ -962,6 +976,8 @@ export class RobloxStudioTools {
   private cookieClient: RobloxCookieClient;
   private instanceManager: StudioInstanceManager;
   private managedConnectionAssociations: Promise<void> = Promise.resolve();
+  // Remembers which peer each MicroProfiler capture_id lives on so collect/cancel/analyze can omit target.
+  private microProfilerCaptureRoutes = new Map<string, { instanceId: string; role: string }>();
 
   constructor(bridge: BridgeService) {
     this.client = new StudioHttpClient(bridge);
@@ -2847,8 +2863,60 @@ export class RobloxStudioTools {
   }
 
   async captureMicroProfiler(target?: string, request: Record<string, unknown> = {}, instance_id?: string) {
-    const targetRole = target ?? 'server';
     const data: Record<string, unknown> = { ...request };
+
+    const rawAction = data.action;
+    let action: MicroProfilerAction = 'capture';
+    if (rawAction !== undefined && rawAction !== null) {
+      if (typeof rawAction !== 'string' || !(MICRO_PROFILER_ACTIONS as readonly string[]).includes(rawAction)) {
+        throw new Error(`capture_micro_profiler action must be one of ${MICRO_PROFILER_ACTIONS.join(', ')}`);
+      }
+      action = rawAction as MicroProfilerAction;
+    }
+    data.action = action;
+
+    const rawCaptureId = data.capture_id;
+    let captureId: string | undefined;
+    if (rawCaptureId !== undefined && rawCaptureId !== null) {
+      if (typeof rawCaptureId !== 'string' || rawCaptureId === '') {
+        throw new Error('capture_id must be a non-empty string when provided');
+      }
+      captureId = rawCaptureId;
+    }
+    const needsCaptureId = MICRO_PROFILER_CAPTURE_ID_ACTIONS.includes(action);
+    if (needsCaptureId && captureId === undefined) {
+      throw new Error(`capture_micro_profiler action="${action}" requires capture_id from a previous capture or arm call`);
+    }
+    if (captureId === undefined) {
+      delete data.capture_id;
+    } else {
+      data.capture_id = captureId;
+    }
+
+    // include_sections is a server-side response filter; the plugin never sees it.
+    const rawIncludeSections = data.include_sections;
+    delete data.include_sections;
+    let includeSections: string[] | undefined;
+    if (rawIncludeSections !== undefined && rawIncludeSections !== null) {
+      if (!Array.isArray(rawIncludeSections)) {
+        throw new Error(`include_sections must be an array of ${MICRO_PROFILER_SECTION_VALUES.join(', ')} when provided`);
+      }
+      includeSections = rawIncludeSections.map((entry) => {
+        if (typeof entry !== 'string' || !MICRO_PROFILER_SECTION_VALUES.includes(entry)) {
+          throw new Error(`include_sections entries must be one of ${MICRO_PROFILER_SECTION_VALUES.join(', ')}`);
+        }
+        return entry;
+      });
+    }
+    const keepAllSections = includeSections !== undefined && includeSections.includes('all');
+
+    // collect/cancel/analyze can omit target: route them back to the peer the capture was armed on.
+    const rememberedRoute = target === undefined && needsCaptureId && captureId !== undefined
+      ? this.microProfilerCaptureRoutes.get(captureId)
+      : undefined;
+    const targetRole = target ?? rememberedRoute?.role ?? 'server';
+    const routeInstanceId = instance_id ?? rememberedRoute?.instanceId;
+
     const outputPath = data.output_path;
     const summaryOutputPath = data.summary_output_path;
     const baselinePath = data.baseline_path;
@@ -2879,7 +2947,7 @@ export class RobloxStudioTools {
       data.__mcp_include_comparison_index = true;
     }
 
-    const resolved = this.bridge.resolveTarget({ instance_id, target: targetRole });
+    const resolved = this.bridge.resolveTarget({ instance_id: routeInstanceId, target: targetRole });
     if (!resolved.ok) throw new RoutingFailure(resolved.error);
     if (resolved.mode !== 'single') {
       throw new RoutingFailure({
@@ -2918,28 +2986,63 @@ export class RobloxStudioTools {
         delete mutable.raw_snapshot_base64;
       }
 
-      const baselineCapture = loadMicroProfilerBaseline(baseline, baselinePath);
-      if (baselineCapture) {
-        mutable.baseline_comparison = compareMicroProfilerCaptures(mutable, baselineCapture, {
-          baselineLabel,
-          currentLabel,
-          maxRows: maxComparisonRows,
-        });
+      const responseCaptureId = mutable.capture_id;
+      if (typeof responseCaptureId === 'string' && responseCaptureId !== '') {
+        this._rememberMicroProfilerRoute(responseCaptureId, resolved.targetInstanceId, resolved.targetRole);
       }
 
-      if (typeof summaryOutputPath === 'string' && summaryOutputPath !== '') {
-        const resolvedSummaryPath = path.resolve(summaryOutputPath);
-        fs.mkdirSync(path.dirname(resolvedSummaryPath), { recursive: true });
-        fs.writeFileSync(resolvedSummaryPath, JSON.stringify(mutable, null, 2), 'utf8');
-        mutable.summary_output_path = resolvedSummaryPath;
+      // arm/cancel and status-only collect replies carry no analysis, so there is nothing to compare or save.
+      const hasAnalysis = typeof mutable.frame_summary === 'object' && mutable.frame_summary !== null;
+
+      if (hasAnalysis) {
+        const baselineCapture = loadMicroProfilerBaseline(baseline, baselinePath);
+        if (baselineCapture) {
+          mutable.baseline_comparison = compareMicroProfilerCaptures(mutable, baselineCapture, {
+            baselineLabel,
+            currentLabel,
+            maxRows: maxComparisonRows,
+          });
+        }
+
+        if (typeof summaryOutputPath === 'string' && summaryOutputPath !== '') {
+          const resolvedSummaryPath = path.resolve(summaryOutputPath);
+          fs.mkdirSync(path.dirname(resolvedSummaryPath), { recursive: true });
+          fs.writeFileSync(resolvedSummaryPath, JSON.stringify(mutable, null, 2), 'utf8');
+          mutable.summary_output_path = resolvedSummaryPath;
+        }
       }
 
       if (!includeComparisonIndex) {
         delete mutable.comparison_index;
       }
+
+      // Trim optional sections only after the summary file has captured the full response.
+      if (!keepAllSections) {
+        const sectionsOmitted: string[] = [];
+        for (const section of MICRO_PROFILER_OPTIONAL_SECTIONS) {
+          if (includeSections !== undefined && includeSections.includes(section)) continue;
+          if (!(section in mutable)) continue;
+          delete mutable[section];
+          sectionsOmitted.push(section);
+        }
+        if (sectionsOmitted.length > 0) {
+          mutable.sections_omitted = sectionsOmitted;
+        }
+      }
     }
 
     return { content: [{ type: 'text', text: JSON.stringify(body) }] };
+  }
+
+  private _rememberMicroProfilerRoute(captureId: string, instanceId: string, role: string): void {
+    // Re-inserting keeps the most recently used capture at the newest end of the map.
+    this.microProfilerCaptureRoutes.delete(captureId);
+    this.microProfilerCaptureRoutes.set(captureId, { instanceId, role });
+    while (this.microProfilerCaptureRoutes.size > MAX_MICRO_PROFILER_ROUTES) {
+      const oldest = this.microProfilerCaptureRoutes.keys().next();
+      if (oldest.done === true) break;
+      this.microProfilerCaptureRoutes.delete(oldest.value);
+    }
   }
 
   async breakpoints(action: string, request: Record<string, unknown> = {}, target?: string, instance_id?: string) {
