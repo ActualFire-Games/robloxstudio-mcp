@@ -61,10 +61,10 @@ await runTest('simulation state tools reset network and device simulator determi
     const connected = await client.callTool('get_connected_instances', {});
     const expectedInstanceId = process.env.MCP_INSTANCE_ID;
     const edit = (connected.instances ?? connected).find((inst) =>
-      inst.role === 'edit' && (expectedInstanceId === undefined || inst.instanceId === expectedInstanceId)
+      inst.roles?.includes('edit') && (expectedInstanceId === undefined || inst.id === expectedInstanceId)
     );
     assert(!!edit, 'edit peer is connected');
-    instanceId = edit.instanceId;
+    instanceId = edit.id;
 
     const listed = await client.rpc('tools/list', {});
     const names = new Set((listed.tools ?? []).map((tool) => tool.name));
@@ -133,7 +133,7 @@ await runTest('simulation state tools reset network and device simulator determi
         overrides: { InboundNetworkLossPercent: 0.5001 },
         instance_id: instanceId,
       }),
-      'cannot exceed 0.5',
+      'must be <= 0.5',
       'packet-loss over engine limit',
     );
 
@@ -143,7 +143,69 @@ await runTest('simulation state tools reset network and device simulator determi
     await delay(1000);
     await client.callTool('reset_simulation_state', { target: 'edit', instance_id: instanceId });
 
-    console.log('  SKIP multiplayer simulation-state coverage: known Roblox StudioTestService multiplayer regression');
+    const multiplayerStart = await client.callTool('multiplayer_playtest', {
+      action: 'start',
+      numPlayers: 2,
+      timeout: 45,
+      instance_id: instanceId,
+    });
+    multiplayerStarted = true;
+    assert(multiplayerStart.success === true, 'multiplayer test starts');
+    assert(multiplayerStart.roles.includes('client-1'), 'multiplayer registers client-1');
+    assert(multiplayerStart.roles.includes('client-2'), 'multiplayer registers client-2');
+
+    const multiplayerReset = await client.callTool('reset_simulation_state', { target: 'edit-and-clients', instance_id: instanceId });
+    assert(roleKeys(multiplayerReset).includes('edit'), 'multiplayer reset includes edit');
+    assert(roleKeys(multiplayerReset).includes('client-1'), 'multiplayer reset includes client-1');
+    assert(roleKeys(multiplayerReset).includes('client-2'), 'multiplayer reset includes client-2');
+    assert(!roleKeys(multiplayerReset).includes('server'), 'multiplayer reset skips server');
+
+    state = await client.callTool('get_simulation_state', { target: 'all-clients', include: 'both', instance_id: instanceId });
+    assertNetworkValues(state.roles['client-1'], Object.fromEntries(NETWORK_KEYS.map((key) => [key, 0])), 'multiplayer client-1 after reset');
+    assertNetworkValues(state.roles['client-2'], Object.fromEntries(NETWORK_KEYS.map((key) => [key, 0])), 'multiplayer client-2 after reset');
+    assertDeviceDefault(state.roles['client-1'], 'multiplayer client-1 after reset');
+    assertDeviceDefault(state.roles['client-2'], 'multiplayer client-2 after reset');
+
+    await client.callTool('set_network_profile', { target: 'all-clients', profile: 'poor', instance_id: instanceId });
+    await client.callTool('set_device_simulator', {
+      target: 'all-clients',
+      deviceId: 'iphone_XR',
+      orientation: 'LandscapeRight',
+      instance_id: instanceId,
+    });
+    state = await client.callTool('get_simulation_state', { target: 'all-clients', include: 'both', instance_id: instanceId });
+    for (const role of ['client-1', 'client-2']) {
+      assertNetworkValues(state.roles[role], {
+        InboundNetworkMinDelayMs: 150,
+        OutboundNetworkMinDelayMs: 150,
+        InboundNetworkJitterMs: 100,
+        OutboundNetworkJitterMs: 100,
+        InboundNetworkLossPercent: 0.5,
+        OutboundNetworkLossPercent: 0.5,
+      }, `multiplayer ${role}`);
+      assertDeviceActive(state.roles[role], 'iphone_XR', `multiplayer ${role}`);
+    }
+
+    const editState = await client.callTool('get_simulation_state', { target: 'edit', include: 'both', instance_id: instanceId });
+    assertNetworkValues(editState.roles.edit, Object.fromEntries(NETWORK_KEYS.map((key) => [key, 0])), 'edit during multiplayer client mutations');
+    assertDeviceDefault(editState.roles.edit, 'edit during multiplayer client mutations');
+
+    await expectToolFailure(
+      () => client.callTool('capture_device_matrix', {
+        target: 'client-1',
+        entries: [{ label: 'mp-client', deviceId: 'iphone_XR' }],
+        settleSeconds: 0,
+        instance_id: instanceId,
+      }),
+      'does not support StudioTestService multiplayer client targets',
+      'multiplayer client matrix capture',
+    );
+
+    await client.callTool('reset_simulation_state', { target: 'edit-and-clients', instance_id: instanceId });
+    await client.callTool('multiplayer_playtest', { action: 'end', timeout: 45, instance_id: instanceId });
+    multiplayerStarted = false;
+    await delay(1000);
+    await client.callTool('reset_simulation_state', { target: 'edit', instance_id: instanceId });
 
     const finalState = await client.callTool('get_simulation_state', { target: 'edit', include: 'both', instance_id: instanceId });
     assertNetworkValues(finalState.roles.edit, Object.fromEntries(NETWORK_KEYS.map((key) => [key, 0])), 'final edit');

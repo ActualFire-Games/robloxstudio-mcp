@@ -1,3 +1,6 @@
+import type { ToolAnnotations } from '@modelcontextprotocol/server';
+import { MAX_PNG_BASE64_CHARACTERS } from '../image-decode.js';
+
 export type ToolCategory = 'read' | 'write';
 
 export interface ToolDefinition {
@@ -5,6 +8,8 @@ export interface ToolDefinition {
   description: string;
   category: ToolCategory;
   inputSchema: object;
+  outputSchema?: object;
+  annotations?: ToolAnnotations;
 }
 
 export const TOOL_DEFINITIONS: ToolDefinition[] = [
@@ -441,6 +446,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         },
         options: {
           type: 'object',
+          description: 'Per-duplicate naming and transform offsets applied cumulatively.',
           properties: {
             namePattern: {
               type: 'string',
@@ -502,6 +508,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
               },
               options: {
                 type: 'object',
+                description: 'Per-duplicate naming and transform offsets applied cumulatively.',
                 properties: {
                   namePattern: {
                     type: 'string',
@@ -852,6 +859,59 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       }
     }
   },
+  {
+    name: 'selection',
+    category: 'read',
+    description: 'Get, replace, or frame the Studio selection. action="get" returns the selected instances (same data as get_selection). action="set" selects paths, with mode="set" to replace, "add" to extend, or "remove" to deselect; an empty paths array in set mode clears the selection. action="view" points the edit-mode camera at a BasePart or Model so the next capture_screenshot frames it, using from (azimuth in degrees, 0 is +X and 90 is +Z), angleY (elevation), and padding (distance scale).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['get', 'set', 'view'],
+          description: 'What to do with the selection. "get" reads it, "set" changes it, "view" frames the target in the edit-mode viewport.'
+        },
+        paths: {
+          type: 'array',
+          items: { type: 'string', minLength: 1 },
+          description: 'action="set": canonical instance paths to apply. An empty array clears the selection when mode is "set".'
+        },
+        mode: {
+          type: 'string',
+          enum: ['set', 'add', 'remove'],
+          default: 'set',
+          description: 'action="set": whether paths replace the selection, are added to it, or are removed from it.'
+        },
+        path: {
+          type: 'string',
+          minLength: 1,
+          description: 'action="view": canonical path of the BasePart or Model to frame.'
+        },
+        from: {
+          type: 'number',
+          description: 'action="view": camera azimuth in degrees around the target; 0 looks from +X, 90 from +Z.'
+        },
+        padding: {
+          type: 'number',
+          exclusiveMinimum: 0,
+          maximum: 10,
+          default: 1,
+          description: 'action="view": distance scale from the target. Values above 1 pull the camera back.'
+        },
+        angleY: {
+          type: 'number',
+          minimum: -89,
+          maximum: 89,
+          description: 'action="view": camera elevation in degrees; positive looks down at the target.'
+        },
+        instance_id: {
+          type: 'string',
+          description: 'Which connected Studio place to target. Required when multiple places are connected; omit when one. Use get_connected_instances to list available IDs.'
+        }
+      },
+      required: ['action']
+    }
+  },
 
   // === Luau Execution ===
   {
@@ -1019,6 +1079,10 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         studio_executable: {
           type: 'string',
           description: 'For action="launch": exact Roblox Studio executable to launch instead of auto-discovering a version.'
+        },
+        studio_working_directory: {
+          type: 'string',
+          description: 'For action="launch": working directory for the Studio process. Isolates relative plugin folders so parallel launches do not share one plugin directory.'
         },
         process_environment: {
           type: 'object',
@@ -1318,6 +1382,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
               resolution: {
                 type: 'object',
                 additionalProperties: false,
+                description: 'Viewport size override for this entry.',
                 properties: {
                   width: {
                     type: 'number',
@@ -1373,7 +1438,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'multiplayer_playtest',
     category: 'write',
-    description: 'Start or inspect a StudioTestService multiplayer playtest. Use action="start" with numPlayers and force=true only when you accept that MCP cannot stop it and you must manually close the multiplayer test windows afterward. action="status" inspects state, action="add_players" adds players, and action="leave_client" removes one client. action="end" is disabled for now and returns the StudioTestService:EndTest broken-API reason. Returns brief lifecycle status only; read script output with get_runtime_logs.',
+    description: 'Start, inspect, or end a StudioTestService multiplayer playtest. action="start" launches numPlayers clients, action="status" inspects state, action="add_players" adds players, action="leave_client" removes one client, and action="end" tears the session down. Returns brief lifecycle status only; read script output with get_runtime_logs.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1394,11 +1459,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           description: 'For action="start": JSON-compatible table passed to StudioTestService:GetTestArgs() on server and clients.'
         },
         value: {
-          description: 'Ignored while action="end" is disabled.'
-        },
-        force: {
-          type: 'boolean',
-          description: 'Required for action="start". Pass true only if you understand StudioTestService:EndTest is broken in this flow and you will manually close the multiplayer test windows.'
+          description: 'Optional value passed to action="end" teardown.'
         },
         timeout: {
           type: 'number',
@@ -1897,12 +1958,12 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
                 additionalProperties: false,
                 required: ['position', 'size', 'rotation', 'paletteKey'],
                 properties: {
-                  position: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 },
-                  size: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 },
-                  rotation: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 },
-                  paletteKey: { type: 'string', minLength: 1 },
-                  shape: { type: 'string', enum: ['Block', 'Wedge', 'Cylinder', 'Ball', 'CornerWedge'] },
-                  transparency: { type: 'number', minimum: 0, maximum: 1 }
+                  position: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: 'World position [X, Y, Z] in studs.' },
+                  size: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: 'Part size [X, Y, Z] in studs.' },
+                  rotation: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: 'Euler rotation [X, Y, Z] in degrees.' },
+                  paletteKey: { type: 'string', minLength: 1, description: 'Palette key naming the BrickColor/Material pair.' },
+                  shape: { type: 'string', enum: ['Block', 'Wedge', 'Cylinder', 'Ball', 'CornerWedge'], description: 'Part shape; defaults to Block.' },
+                  transparency: { type: 'number', minimum: 0, maximum: 1, description: 'Part transparency from 0 (opaque) to 1 (invisible).' }
                 }
               },
               {
@@ -2098,15 +2159,18 @@ part(0,2,0,2,1,1,"b")`,
                     required: ['modelKey', 'position'],
                     properties: {
                       modelKey: {
-                        type: 'string'
+                        type: 'string',
+                        description: 'Key of the model in the scene models map.'
                       },
                       position: {
                         type: 'array',
-                        items: { type: 'number' }
+                        items: { type: 'number' },
+                        description: 'World position [X, Y, Z] in studs.'
                       },
                       rotation: {
                         type: 'array',
-                        items: { type: 'number' }
+                        items: { type: 'number' },
+                        description: 'Euler rotation [X, Y, Z] in degrees.'
                       }
                     }
                   },
@@ -2237,9 +2301,9 @@ part(0,2,0,2,1,1,"b")`,
         position: {
           type: 'object',
           properties: {
-            x: { type: 'number' },
-            y: { type: 'number' },
-            z: { type: 'number' }
+            x: { type: 'number', description: 'X component in studs.' },
+            y: { type: 'number', description: 'Y component in studs.' },
+            z: { type: 'number', description: 'Z component in studs.' }
           },
           description: 'Optional world position to place the asset'
         },
@@ -2268,6 +2332,7 @@ part(0,2,0,2,1,1,"b")`,
         },
         image_base64: {
           type: 'string',
+          maxLength: MAX_PNG_BASE64_CHARACTERS,
           description: 'Base64-encoded PNG reference image bytes. Requires image_mime_type="image/png" and is uploaded as a Roblox Decal/Image asset before generation. Mutually exclusive with image_path and image_asset_id.'
         },
         image_mime_type: {
@@ -2297,9 +2362,9 @@ part(0,2,0,2,1,1,"b")`,
         size: {
           type: 'object',
           properties: {
-            x: { type: 'number' },
-            y: { type: 'number' },
-            z: { type: 'number' }
+            x: { type: 'number', description: 'X component in studs.' },
+            y: { type: 'number', description: 'Y component in studs.' },
+            z: { type: 'number', description: 'Z component in studs.' }
           },
           description: 'Optional approximate generated object size. GenerationService may not match it exactly.'
         },
@@ -2700,9 +2765,9 @@ part(0,2,0,2,1,1,"b")`,
           type: 'object',
           description: 'Exactly one of { path }, { url }, or { base64 }. path = read from local disk; url = http(s) only, fetched by the MCP server process, capped at 50 MiB; base64 = raw bytes inline.',
           properties: {
-            path: { type: 'string' },
-            url: { type: 'string' },
-            base64: { type: 'string' }
+            path: { type: 'string', description: 'Local .rbxm/.rbxmx path read by the MCP server process.' },
+            url: { type: 'string', description: 'http(s) URL fetched by the MCP server process; capped at 50 MiB.' },
+            base64: { type: 'string', description: 'Raw model bytes inline, base64-encoded.' }
           },
           oneOf: [
             { required: ['path'] },

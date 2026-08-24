@@ -56,7 +56,7 @@ describe('HTTP Server', () => {
       const inspectorApp = createHttpServer(
         tools,
         bridge,
-        new Set(['get_file_tree']),
+        new Set(['get_place_info']),
         { name: 'robloxstudio-mcp-inspector', version: '2.0.0', tools: [] },
       );
 
@@ -227,27 +227,40 @@ describe('HTTP Server', () => {
       expect(deleteScriptLines).not.toHaveBeenCalled();
     });
 
-    test('multiplayer handlers forward force for explicit hazardous start', async () => {
+    test('multiplayer handler forwards only supported start arguments', async () => {
       const multiplayerPlaytest = jest.fn(async () => ({ content: [] }));
-      const multiplayerTestStart = jest.fn(async () => ({ content: [] }));
-      const fakeTools = { multiplayerPlaytest, multiplayerTestStart } as unknown as RobloxStudioTools;
+      const fakeTools = { multiplayerPlaytest } as unknown as RobloxStudioTools;
 
       await TOOL_HANDLERS.multiplayer_playtest(fakeTools, {
         action: 'start',
         numPlayers: 2,
         timeout: 5,
         instance_id: 'place:test',
-        force: true,
       });
-      expect(multiplayerPlaytest).toHaveBeenLastCalledWith('start', 2, undefined, undefined, undefined, 5, 'place:test', true);
+      expect(multiplayerPlaytest).toHaveBeenLastCalledWith('start', 2, undefined, undefined, undefined, 5, 'place:test');
+    });
 
-      await TOOL_HANDLERS.multiplayer_test_start(fakeTools, {
-        numPlayers: 2,
-        timeout: 5,
+    test('selection handler forwards the lifecycle action and options together', async () => {
+      const selection = jest.fn(async () => ({ content: [] }));
+      const fakeTools = { selection } as unknown as RobloxStudioTools;
+
+      await TOOL_HANDLERS.selection(fakeTools, {
+        action: 'view',
+        path: 'game.Workspace.Subject',
+        padding: 1.25,
         instance_id: 'place:test',
-        force: true,
       });
-      expect(multiplayerTestStart).toHaveBeenLastCalledWith(2, undefined, 5, 'place:test', true);
+
+      expect(selection).toHaveBeenLastCalledWith(
+        'view',
+        expect.objectContaining({
+          action: 'view',
+          path: 'game.Workspace.Subject',
+          padding: 1.25,
+          instance_id: 'place:test',
+        }),
+        'place:test',
+      );
     });
 
     test('grep_scripts uses only usePattern for pattern mode', async () => {

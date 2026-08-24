@@ -6,15 +6,17 @@ export { RobloxStudioTools } from './tools/index.js';
 export { StudioHttpClient } from './tools/studio-client.js';
 export {
   TOOL_DEFINITIONS,
-  DEPRECATED_TOOL_DEFINITIONS,
   getAllTools,
-  getAllCallableTools,
   getReadOnlyTools,
-  getReadOnlyCallableTools,
 } from './tools/definitions.js';
 export type { ToolDefinition, ToolCategory } from './tools/definitions.js';
 export { OpenCloudClient } from './opencloud-client.js';
-export { getPluginsFolder, isWSL, handleVariantConflict } from './install-plugin-helpers.js';
+export {
+  configurePluginAssetForPort,
+  getPluginsFolder,
+  handleVariantConflict,
+  isWSL,
+} from './install-plugin-helpers.js';
 export { RobloxCookieClient } from './roblox-cookie-client.js';
 export {
   canonicalBuiltInSkillName,

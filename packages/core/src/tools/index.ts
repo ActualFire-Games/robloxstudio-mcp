@@ -10,6 +10,7 @@ import {
 import { RobloxCookieClient } from '../roblox-cookie-client.js';
 import {
   parseStudioProcessEnvironmentPatch,
+  parseStudioWorkingDirectory,
   StudioInstanceManager,
   type ManagedStudioInstance,
   type StudioLaunchSource,
@@ -104,24 +105,6 @@ const CREATOR_STORE_SORT_CATEGORIES = new Set<string>([
   'UpdatedTime',
   'Ratings',
 ]);
-const MULTIPLAYER_FORCE_REQUIRED_MESSAGE =
-  'StudioTestService multiplayer stop is currently disabled because StudioTestService:EndTest is broken for this flow. ' +
-  'Pass force=true only if you understand you must manually close the multiplayer test windows afterward.';
-const MULTIPLAYER_STOP_DISABLED_MESSAGE =
-  'Multiplayer playtest stop/end is disabled because StudioTestService:EndTest is currently broken for this flow. ' +
-  'Manually close the Studio multiplayer test windows instead.';
-
-function multiplayerStopDisabledBody(): Record<string, unknown> {
-  return {
-    success: false,
-    error: 'multiplayer_stop_disabled',
-    message: MULTIPLAYER_STOP_DISABLED_MESSAGE,
-    reason: 'StudioTestService:EndTest does not reliably end StudioTestService multiplayer sessions from MCP right now.',
-    manualCleanupRequired: true,
-    recoveryHint: 'Close the Roblox Studio multiplayer test windows manually.',
-  };
-}
-
 function normalizeCreatorStoreSearch(
   assetType: string,
   query?: string,
@@ -1867,66 +1850,22 @@ export class RobloxStudioTools {
     const response = await this._callSingle('/api/get-script-source', { instancePath, startLine, endLine }, undefined, instance_id);
 
     if (response.error) {
-      return { content: [{ type: 'text', text: `Error: ${response.error}` }] };
+      return this._textResult({ error: response.error });
     }
-
-    const scriptTypeInfo: Record<string, string> = {
-      'Script': 'Server Script, runs on the server only',
-      'LocalScript': 'Local Script, runs on the client',
-      'ModuleScript': 'Module Script, shared library loaded via require()',
-    };
-
-    const serviceInfo: Record<string, string> = {
-      'Workspace': 'Workspace, 3D world replicated to all clients',
-      'ServerScriptService': 'ServerScriptService, server only',
-      'ServerStorage': 'ServerStorage, server only storage',
-      'StarterGui': 'StarterGui, UI templates copied to each player',
-      'StarterPlayerScripts': 'StarterPlayerScripts, client scripts',
-      'StarterCharacterScripts': 'StarterCharacterScripts, character scripts',
-      'ReplicatedStorage': 'ReplicatedStorage, shared server and client',
-      'ReplicatedFirst': 'ReplicatedFirst, first to load on client',
-    };
-
     const pathStr = (response.instancePath as string) || instancePath;
-    const pathSegments = pathStr.split('.');
-    const topService =
-      typeof response.topService === 'string' && response.topService.length > 0
-        ? response.topService
-        : pathSegments[0] === 'game' ? (pathSegments[1] ?? 'game') : pathSegments[0];
-    const typeNote = scriptTypeInfo[response.className as string] || (response.className as string);
-    const serviceNote = serviceInfo[topService] || topService;
     const showRange = Boolean(response.isPartial || response.truncated)
       && response.startLine !== undefined
       && response.endLine !== undefined;
-
-    const headerLines: string[] = [
-      `Path:     ${pathStr}`,
-      `Type:     ${typeNote}`,
-      `Location: ${serviceNote}`,
-      `Lines:    ${response.lineCount} total${
-        showRange ? ` (showing ${response.startLine}-${response.endLine})` : ''
-      }`,
-    ];
-
-    if (response.enabled === false) {
-      headerLines.push(`Status:   DISABLED`);
-    }
-
-    if (typeof response.note === 'string' && response.note.length > 0) {
-      headerLines.push(`Note:     ${response.note}`);
-    } else if (response.truncated) {
-      headerLines.push(`Note:     Truncated response; use line_range to read more`);
-    }
-
-    const header = headerLines.join('\n');
-    const code = (response.numberedSource || response.source) as string;
-
-    return {
-      content: [{
-        type: 'text',
-        text: `${header}\n\n${code}`,
-      }]
-    };
+    return this._textResult({
+      path: pathStr,
+      className: response.className,
+      lineCount: response.lineCount,
+      ...(showRange ? { startLine: response.startLine, endLine: response.endLine } : {}),
+      ...(response.enabled === false ? { enabled: false } : {}),
+      ...(response.truncated ? { truncated: true } : {}),
+      ...(typeof response.note === 'string' && response.note.length > 0 ? { note: response.note } : {}),
+      source: response.numberedSource || response.source,
+    });
   }
 
   async setScriptSource(instancePath: string, source: string, instance_id?: string) {
@@ -2132,6 +2071,97 @@ export class RobloxStudioTools {
 
   async getSelection(instance_id?: string) {
     const response = await this._callSingle('/api/get-selection', {}, undefined, instance_id);
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(response)
+        }
+      ]
+    };
+  }
+
+  async selection(
+    action: string,
+    opts: {
+      paths?: unknown;
+      mode?: string;
+      path?: string;
+      from?: number;
+      padding?: number;
+      angleY?: number;
+    } = {},
+    instance_id?: string,
+  ) {
+    if (action !== 'get' && action !== 'set' && action !== 'view') {
+      throw new Error('selection requires action=get|set|view');
+    }
+
+    if (action === 'get') {
+      return this.getSelection(instance_id);
+    }
+
+    if (action === 'set') {
+      if (!Array.isArray(opts.paths)) {
+        throw new Error('selection action=set requires a paths array; empty clears');
+      }
+      return this.setSelection(opts.paths, opts.mode, instance_id);
+    }
+
+    if (!opts.path) {
+      throw new Error('selection action=view requires path');
+    }
+    return this.focusViewport(opts.path, opts.from, opts.padding, opts.angleY, instance_id);
+  }
+
+  async setSelection(paths: string[], mode: string | undefined, instance_id?: string) {
+    if (!Array.isArray(paths) || paths.some(path => typeof path !== 'string' || path.length === 0)) {
+      throw new Error('selection paths must contain only non-empty instance paths');
+    }
+    const selectionMode = mode ?? 'set';
+    if (!['set', 'add', 'remove'].includes(selectionMode)) {
+      throw new Error(`selection mode must be "set", "add" or "remove" (got: ${selectionMode})`);
+    }
+    const response = await this._callSingle(
+      '/api/set-selection',
+      { paths, mode: selectionMode },
+      'edit',
+      instance_id,
+    );
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(response)
+        }
+      ]
+    };
+  }
+
+  async focusViewport(
+    instancePath: string,
+    from?: number,
+    padding?: number,
+    angleY?: number,
+    instance_id?: string,
+  ) {
+    if (!instancePath) {
+      throw new Error('selection action=view requires path');
+    }
+    if (padding !== undefined && (padding <= 0 || padding > 10)) {
+      throw new Error('selection padding must be greater than 0 and at most 10');
+    }
+    if (angleY !== undefined && (angleY < -89 || angleY > 89)) {
+      throw new Error('selection angleY must be between -89 and 89');
+    }
+
+    const { instanceId, clientRole } = this._resolveRuntime(instance_id);
+    const response = await this._callSingle('/api/focus-viewport', {
+      path: instancePath,
+      from,
+      padding,
+      angleY,
+    }, clientRole ?? 'edit', instanceId);
     return {
       content: [
         {
@@ -3200,6 +3230,7 @@ export class RobloxStudioTools {
       consecutive_confirmed_misses: record.consecutiveConfirmedMisses ?? 0,
       source: record.source,
       local_place_file: record.localPlaceFile,
+      studio_working_directory: record.studioWorkingDirectory,
       place_id: record.placeId,
       place_version: record.placeVersion,
       launched_at: new Date(record.launchedAt).toISOString(),
@@ -3431,6 +3462,7 @@ export class RobloxStudioTools {
       studioExecutable = request.studio_executable;
     }
     const processEnvironment = parseStudioProcessEnvironmentPatch(request.process_environment);
+    const studioWorkingDirectory = parseStudioWorkingDirectory(request.studio_working_directory);
 
     if (launchSource === 'published_place' && placeId !== undefined && await this._isLatestPublishedPlaceOpen(placeId)) {
       return this._textResult({
@@ -3459,6 +3491,7 @@ export class RobloxStudioTools {
       connectionTimeoutMs: timeoutMs,
       studioExecutable,
       processEnvironment,
+      studioWorkingDirectory,
       ...(requireProcessIdentity ? { requireProcessIdentity: true } : {}),
     });
 
@@ -3821,7 +3854,6 @@ export class RobloxStudioTools {
     value?: unknown,
     timeout?: number,
     instance_id?: string,
-    force?: boolean,
   ) {
     if (
       action !== 'start' &&
@@ -3838,7 +3870,6 @@ export class RobloxStudioTools {
       return {
         phase: state.phase,
         roles: Array.isArray(state.peers) ? state.peers.map((peer: any) => peer.role).filter((role: unknown) => typeof role === 'string') : [],
-        clientRoles: Array.isArray(state.clientRoles) ? state.clientRoles : [],
         playerCount: typeof state.playerCount === 'number' ? state.playerCount : undefined,
         error: typeof state.error === 'string' ? state.error : undefined,
       };
@@ -3853,37 +3884,22 @@ export class RobloxStudioTools {
     }
 
     if (action === 'start') {
-      if (force !== true) {
-        return this._textResult({
-          success: false,
-          action,
-          error: 'multiplayer_force_required',
-          message: MULTIPLAYER_FORCE_REQUIRED_MESSAGE,
-          requiresForce: true,
-          manualCleanupRequired: true,
-        });
-      }
-
-      const body = this._parseTextResult(await this.multiplayerTestStart(numPlayers as number, testArgs, timeout, instance_id, force));
+      const body = this._parseTextResult(await this.multiplayerTestStart(numPlayers as number, testArgs, timeout, instance_id));
       const state = body.state && typeof body.state === 'object' ? body.state as Record<string, any> : {};
       const launched = body.success === true && body.ready === true;
       return this._textResult(launched ? {
         success: true,
         action,
-        message: 'Multiplayer playtest started. Stop/end is disabled; close the multiplayer test windows manually when finished.',
-        ready: true,
-        manualCleanupRequired: true,
+        message: 'Multiplayer playtest started.',
         roles: Array.isArray(body.roles) ? body.roles : undefined,
-        clientRoles: Array.isArray(state.clientRoles) ? state.clientRoles : undefined,
         playerCount: typeof state.playerCount === 'number' ? state.playerCount : undefined,
       } : {
         success: false,
         action,
         error: body.error ?? body.wait?.error ?? 'multiplayer_start_not_detected',
         message: body.success === true
-          ? 'Multiplayer playtest start was requested, but MCP did not detect the required server/client peers before timeout. You may need to close the test windows manually.'
+          ? 'Multiplayer playtest start was requested, but MCP did not detect the required server/client peers before timeout.'
           : body.message ?? 'Multiplayer playtest did not start.',
-        manualCleanupRequired: body.startRequested === true || body.launched === true ? true : undefined,
         roles: Array.isArray(body.roles) ? body.roles : undefined,
       });
     }
@@ -3897,7 +3913,6 @@ export class RobloxStudioTools {
         action,
         message: 'Players added.',
         roles: Array.isArray(body.roles) ? body.roles : undefined,
-        clientRoles: Array.isArray(state.clientRoles) ? state.clientRoles : undefined,
         playerCount: typeof state.playerCount === 'number' ? state.playerCount : undefined,
       } : {
         success: false,
@@ -3926,39 +3941,42 @@ export class RobloxStudioTools {
       });
     }
 
-    return this._textResult({
+    const body = this._parseTextResult(await this.multiplayerTestEnd(value, timeout, instance_id));
+    return this._textResult(body.success === true && body.ended === true ? {
+      success: true,
       action,
-      ...multiplayerStopDisabledBody(),
+      message: body.alreadyEnded === true
+        ? 'Multiplayer playtest already ended.'
+        : (body.teardownConfirmed === false
+          ? 'Multiplayer playtest end requested; teardown still in progress. Use multiplayer_playtest action="status" to confirm.'
+          : 'Multiplayer playtest ended.'),
+      teardownConfirmed: body.teardownConfirmed === true,
+    } : {
+      success: false,
+      action,
+      error: body.error ?? 'end_failed',
+      message: body.message ?? 'Multiplayer playtest did not end.',
+      roles: Array.isArray(body.roles) ? body.roles : undefined,
+      editDone: body.editDone === false ? false : undefined,
     });
   }
 
-  async multiplayerTestStart(numPlayers: number, testArgs?: unknown, timeout?: number, instance_id?: string, force?: boolean) {
+  async multiplayerTestStart(numPlayers: number, testArgs?: unknown, timeout?: number, instance_id?: string) {
     if (!Number.isInteger(numPlayers) || numPlayers < 1 || numPlayers > 8) {
       throw new Error('numPlayers must be an integer from 1 to 8');
     }
     const editTarget = this._resolveSingleTarget('edit', instance_id);
-    if (force !== true) {
-      return this._textResult({
-        success: false,
-        error: 'multiplayer_force_required',
-        message: MULTIPLAYER_FORCE_REQUIRED_MESSAGE,
-        requiresForce: true,
-        manualCleanupRequired: true,
-      });
-    }
-
     const existingRuntime = this._runtimeTargetsForEquivalentInstances(editTarget.instanceId);
     if (existingRuntime.length > 0) {
       const roles = this._rolesForEquivalentInstances(editTarget.instanceId);
       return this._textResult({
         success: false,
         error: 'Multiplayer playtest already running.',
-        message: 'A Studio runtime is already connected for this place. Close the existing playtest windows manually before starting another multiplayer playtest.',
+        message: 'A Studio runtime is already connected for this place. End the existing playtest before starting another multiplayer playtest.',
         ready: true,
         timedOut: false,
         roles,
         runtimeRoles: existingRuntime.map((target) => target.role),
-        manualCleanupRequired: true,
       });
     }
 
@@ -3993,8 +4011,7 @@ export class RobloxStudioTools {
           error: success ? undefined : wait.error ?? 'multiplayer_start_not_detected',
           message: success
             ? 'Multiplayer Studio test started and runtime peers detected.'
-            : 'Multiplayer Studio test start was requested, but MCP did not detect the required server/client peers before timeout. Close the multiplayer test windows manually if Studio launched them.',
-          manualCleanupRequired: success || response.success === true ? true : undefined,
+            : 'Multiplayer Studio test start was requested, but MCP did not detect the required server/client peers before timeout.',
           startedAt,
         }),
       }],
@@ -4074,22 +4091,72 @@ export class RobloxStudioTools {
   }
 
   async multiplayerTestEnd(value?: unknown, timeout?: number, instance_id?: string) {
-    void value;
-    void timeout;
-    void instance_id;
-    return this._textResult(multiplayerStopDisabledBody());
+    let serverTarget: { instanceId: string; role: string };
+    try {
+      serverTarget = this._resolveSingleTarget('server', instance_id);
+    } catch (err) {
+      const instanceId = this._resolveInstanceIdOnly(instance_id);
+      const hasRuntime = this._rolesForInstance(instanceId).some(
+        (role) => role === 'server' || /^client-\d+$/.test(role),
+      );
+      if (!hasRuntime) {
+        return this._textResult({
+          success: true,
+          ended: true,
+          alreadyEnded: true,
+          teardownConfirmed: true,
+          message: 'No active multiplayer test to end (already ended).',
+        });
+      }
+      throw err;
+    }
+    const response = await this.client.request(
+      '/api/multiplayer-test-end',
+      { value: value ?? 'ended_by_mcp' },
+      serverTarget.instanceId,
+      serverTarget.role,
+    );
+    if (response?.error) {
+      return this._textResult(response);
+    }
+    const editDone = await this._waitForMultiplayerEditDone(serverTarget.instanceId, timeout ?? 30);
+    const wait = await this._waitForRuntimeRoles(
+      serverTarget.instanceId,
+      { noRuntime: true },
+      timeout ?? 30,
+    );
+    const state = await this._buildMultiplayerState(serverTarget.instanceId);
+    return this._textResult({
+      ...response,
+      ended: response.success === true,
+      teardownConfirmed: wait.ok,
+      editDone,
+      timedOut: wait.timedOut,
+      roles: wait.roles,
+      state,
+    });
   }
 
   async getConnectedInstances() {
-    const instances = this.bridge.getPublicInstances();
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({ instances, count: instances.length })
-        }
-      ]
-    };
+    const places = new Map<string, { id: string; name: string; roles: string[] }>();
+
+    for (const peer of this.bridge.getPublicInstances()) {
+      let place = places.get(peer.instanceId);
+      if (!place) {
+        place = {
+          id: peer.instanceId,
+          name: peer.placeName || peer.dataModelName,
+          roles: [],
+        };
+        places.set(peer.instanceId, place);
+      }
+
+      if (!place.roles.includes(peer.role)) {
+        place.roles.push(peer.role);
+      }
+    }
+
+    return this._textResult({ instances: [...places.values()] });
   }
 
   // Groups connected instances into sessions keyed by the place-scoped

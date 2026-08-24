@@ -1,15 +1,18 @@
 {
   "name": "@chrrxs/robloxstudio-mcp-inspector",
-  "version": "2.23.0",
-  "description": "Read-only MCP server for inspecting and debugging Roblox Studio from AI coding tools",
+  "version": "3.0.1",
+  "description": "DataModel read-only MCP server for inspecting and debugging Roblox Studio from AI coding tools",
   "main": "dist/index.js",
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "bin": {
     "robloxstudio-mcp-inspector": "dist/index.js"
   },
   "files": [
     "dist/**/*",
-    "studio-plugin/**/*"
+    "studio-plugin/MCPInspectorPlugin.rbxmx"
   ],
   "scripts": {
     "build": "tsup",
@@ -37,11 +40,10 @@
     "url": "https://github.com/chrrxs/robloxstudio-mcp/issues"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.27.1",
-    "acorn": "^8.11.0",
+    "@modelcontextprotocol/node": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.0.0",
     "express": "^4.18.2",
     "node-fetch": "^3.3.2",
-    "uuid": "^9.0.1",
     "ws": "^8.14.2"
   },
   "devDependencies": {

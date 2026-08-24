@@ -162,6 +162,59 @@ describe('Smoke', () => {
     expect(bridge.getPendingRequest('place:nope', 'edit')).toBeNull();
   });
 
+  test('get_connected_instances returns one compact routing row per place', async () => {
+    const bridge = new BridgeService();
+    const tools = new RobloxStudioTools(bridge);
+
+    bridge.registerInstance({
+      pluginSessionId: 'place-one-edit',
+      instanceId: 'place:1',
+      role: 'edit',
+      placeId: 1,
+      placeName: 'Place One',
+      dataModelName: 'PlaceOneEdit',
+      isRunning: false,
+    });
+    bridge.registerInstance({
+      pluginSessionId: 'place-one-server',
+      instanceId: 'place:1',
+      role: 'server',
+      placeId: 1,
+      placeName: 'Place One',
+      dataModelName: 'PlaceOneServer',
+      isRunning: true,
+    });
+    bridge.registerInstance({
+      pluginSessionId: 'place-one-client',
+      instanceId: 'place:1',
+      role: 'client',
+      placeId: 1,
+      placeName: 'Place One',
+      dataModelName: 'PlaceOneClient',
+      isRunning: true,
+    });
+    bridge.registerInstance({
+      pluginSessionId: 'place-two-edit',
+      instanceId: 'anon:2',
+      role: 'edit',
+      placeId: 0,
+      placeName: '',
+      dataModelName: 'Untitled Place',
+      isRunning: false,
+    });
+
+    const result = await tools.getConnectedInstances();
+    const payload = JSON.parse((result.content[0] as { type: 'text'; text: string }).text);
+
+    expect(payload).toEqual({
+      instances: [
+        { id: 'place:1', name: 'Place One', roles: ['edit', 'server', 'client-1'] },
+        { id: 'anon:2', name: 'Untitled Place', roles: ['edit'] },
+      ],
+    });
+    expect(Object.keys(payload.instances[0]).sort()).toEqual(['id', 'name', 'roles']);
+  });
+
   test('WSL Studio launch does not inherit the synchronous PowerShell pipes', () => {
     const script = buildWindowsStudioStartScript(
       'C:\\Roblox\\RobloxStudioBeta.exe',
@@ -190,6 +243,7 @@ describe('Smoke', () => {
     expect(script).toContain('WaitForSingleObject(processHandle, 15000)');
     expect(script).toContain('$launch.StartedAtFileTime');
     expect(script).not.toContain('$psi.UseShellExecute');
+    expect(script).toContain("'C:\\Roblox\\RobloxStudioBeta.exe', 'C:\\Roblox\\RobloxStudioBeta.exe --task EditFile --localPlaceFile C:\\Places\\Baseplate.rbxl', $null)");
   });
 
   test('Windows Studio shutdown uses a creation-checked process handle', () => {
@@ -209,7 +263,7 @@ describe('Smoke', () => {
     expect(script).not.toContain('Stop-Process');
   });
 
-  test('WSL Studio launch applies validated environment values as PowerShell data', () => {
+  test('WSL Studio launch applies environment and working-directory values as PowerShell data', () => {
     const script = buildWindowsStudioStartScript(
       'C:\\Roblox\\RobloxStudioBeta.exe',
       ['--task', 'EditFile'],
@@ -220,6 +274,7 @@ describe('Smoke', () => {
         },
         remove: ['STUDIO_LAUNCH_LOADED_BUILD_VERSION'],
       },
+      "C:\\Studio Workers\\worker's-directory",
     );
 
     expect(script).toContain(
@@ -231,11 +286,22 @@ describe('Smoke', () => {
     expect(script.indexOf("'STUDIO_LAUNCH_LOADER'")).toBeLessThan(
       script.indexOf('[McpSuspendedStudio]::Start('),
     );
+    expect(script).toContain(
+      "[McpSuspendedStudio]::Start('C:\\Roblox\\RobloxStudioBeta.exe', 'C:\\Roblox\\RobloxStudioBeta.exe --task EditFile', 'C:\\Studio Workers\\worker''s-directory')",
+    );
+    expect(script).toContain('Start(string application, string commandLine, string currentDirectory)');
+    expect(script.match(/IntPtr\.Zero, currentDirectory, ref startup/g)).toHaveLength(2);
     expect(script).toContain('CREATE_SUSPENDED');
 
     expect(() => buildWindowsStudioStartScript('Studio.exe', [], {
       set: { 'STUDIO_LAUNCH_LOADER; Remove-Item Env:PATH': 'loader.dll' },
     })).toThrow(/Invalid process environment variable name/);
+    expect(() => buildWindowsStudioStartScript(
+      'Studio.exe',
+      [],
+      undefined,
+      ' \t',
+    )).toThrow(/studio_working_directory must be a non-empty string/);
   });
 
   test('HTTP server starts and responds to health check', async () => {
@@ -411,10 +477,11 @@ describe('Smoke', () => {
       connectionTimeoutMs: 120000,
       studioExecutable: undefined,
       processEnvironment: undefined,
+      studioWorkingDirectory: undefined,
     });
   });
 
-  test('manage_instance threads exact executable and process environment into launch', async () => {
+  test('manage_instance threads exact executable, process environment, and working directory into launch', async () => {
     const bridge = new BridgeService();
     const tools = new RobloxStudioTools(bridge);
     const launch = jest.fn(async (options) => ({
@@ -438,6 +505,7 @@ describe('Smoke', () => {
       local_place_file: '/tmp/custom-launch-place.rbxl',
       wait_for_connection: false,
       studio_executable: 'C:\\Roblox\\version-custom\\RobloxStudioBeta.exe',
+      studio_working_directory: 'C:\\Studio Workers\\worker-7',
       process_environment: {
         set: {
           STUDIO_LAUNCH_LOADER: 'C:\\LaunchTools\\studio_loader.dll',
@@ -449,6 +517,7 @@ describe('Smoke', () => {
 
     expect(launch).toHaveBeenCalledWith(expect.objectContaining({
       studioExecutable: 'C:\\Roblox\\version-custom\\RobloxStudioBeta.exe',
+      studioWorkingDirectory: 'C:\\Studio Workers\\worker-7',
       processEnvironment: {
         set: {
           STUDIO_LAUNCH_LOADER: 'C:\\LaunchTools\\studio_loader.dll',
@@ -466,10 +535,11 @@ describe('Smoke', () => {
     })).rejects.toThrow(/Invalid process environment variable name/);
   });
 
-  test('Studio launch uses the exact executable, patches only the child environment, and does not persist it', async () => {
+  test('Studio launch uses the exact executable and working directory, patches only the child environment, and persists no environment secrets', async () => {
     const registryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'robloxstudio-mcp-registry-'));
     const exactExecutable = 'C:\\Roblox\\version-custom\\RobloxStudioBeta.exe';
     const parentLoadedVersion = process.env.STUDIO_LAUNCH_LOADED_BUILD_VERSION;
+    const studioWorkingDirectory = '/tmp/rsmcp-worker-7655';
     const liveProcessIds = new Set<number>();
     const resolveStudioExe = jest.fn(() => 'C:\\Roblox\\latest\\RobloxStudioBeta.exe');
     let capturedSpawnOptions: SpawnOptions | undefined;
@@ -498,6 +568,7 @@ describe('Smoke', () => {
         source: 'local_file',
         localPlaceFile: '/tmp/custom-launch-place.rbxl',
         studioExecutable: exactExecutable,
+        studioWorkingDirectory,
         processEnvironment: {
           set: {
             STUDIO_LAUNCH_LOADER: 'C:\\LaunchTools\\secret-loader.dll',
@@ -509,6 +580,8 @@ describe('Smoke', () => {
 
       expect(resolveStudioExe).not.toHaveBeenCalled();
       expect(record.exe).toBe(exactExecutable);
+      expect(record.studioWorkingDirectory).toBe(studioWorkingDirectory);
+      expect(capturedSpawnOptions?.cwd).toBe(studioWorkingDirectory);
       expect((capturedSpawnOptions?.env as NodeJS.ProcessEnv).STUDIO_LAUNCH_LOADER).toBe('C:\\LaunchTools\\secret-loader.dll');
       expect((capturedSpawnOptions?.env as NodeJS.ProcessEnv).STUDIO_LAUNCH_BUILD_VERSION).toBe('0.0.0+build.123');
       expect((capturedSpawnOptions?.env as NodeJS.ProcessEnv).STUDIO_LAUNCH_LOADED_BUILD_VERSION).toBeUndefined();
@@ -519,6 +592,7 @@ describe('Smoke', () => {
         'utf8',
       );
       expect(registryRecord).toContain(exactExecutable.replace(/\\/g, '\\\\'));
+      expect(registryRecord).toContain('"studioWorkingDirectory": "/tmp/rsmcp-worker-7655"');
       expect(registryRecord).not.toContain('STUDIO_LAUNCH_LOADER');
       expect(registryRecord).not.toContain('secret-loader.dll');
       expect(registryRecord).not.toContain('processEnvironment');
@@ -2203,7 +2277,7 @@ describe('Smoke', () => {
     })).toBe(true);
   });
 
-  test('client broker forwards script profiler captures to client peers', () => {
+  test('client broker forwards client-only viewport and profiler operations', () => {
     const cwd = process.cwd();
     const repoRoot = fs.existsSync(path.join(cwd, 'studio-plugin')) ? cwd : path.resolve(cwd, '../..');
     const source = fs.readFileSync(path.join(repoRoot, 'studio-plugin/src/modules/ClientBroker.ts'), 'utf8');
@@ -2211,6 +2285,8 @@ describe('Smoke', () => {
     expect(source).toContain('payload.endpoint === "/api/capture-script-profiler"');
     expect(source).toContain('"/api/capture-micro-profiler"');
     expect(source).toContain('payload.endpoint === "/api/capture-micro-profiler"');
+    expect(source).toContain('\t"/api/focus-viewport",');
+    expect(source).toContain('payload.endpoint === "/api/focus-viewport"');
   });
 
   test('breakpoints decorates response with resolved target role', async () => {
@@ -2811,7 +2887,7 @@ describe('Smoke', () => {
     });
   });
 
-  test('get_script_source shows plugin truncation range and note', async () => {
+  test('get_script_source returns structured truncation metadata', async () => {
     const bridge = new BridgeService();
     const tools = new RobloxStudioTools(bridge);
     bridge.registerInstance(READY);
@@ -2833,10 +2909,17 @@ describe('Smoke', () => {
     });
 
     const result = await resultPromise;
-    const text = result.content[0].text;
-    expect(text).toContain('Lines:    1700 total (showing 1-300)');
-    expect(text).toContain('Note:     Truncated to first 300 lines; use line_range to read more.');
-    expect(text).not.toContain('Truncated to first 1000 lines');
+    const body = JSON.parse(result.content[0].text);
+    expect(body).toMatchObject({
+      path: 'game.ServerScriptService.Manager',
+      className: 'Script',
+      lineCount: 1700,
+      startLine: 1,
+      endLine: 300,
+      truncated: true,
+      note: 'Truncated to first 300 lines; use line_range to read more.',
+      source: '1  print("start")\n300 print("still here")',
+    });
   });
 
   test('start_playtest reports already running when runtime peers are connected', async () => {
@@ -3238,30 +3321,11 @@ describe('Smoke', () => {
       action: 'status',
       phase: 'running',
       roles: ['edit', 'server', 'client-1'],
-      clientRoles: ['client-1'],
       playerCount: 1,
     });
   });
 
-  test('multiplayer_playtest start requires force before launching hazardous StudioTestService sessions', async () => {
-    const bridge = new BridgeService();
-    const tools = new RobloxStudioTools(bridge);
-    bridge.registerInstance(READY);
-
-    const result = await tools.multiplayerPlaytest('start', 1, undefined, undefined, undefined, 1, 'place:test');
-    const body = JSON.parse(result.content[0].text);
-
-    expect(body).toMatchObject({
-      success: false,
-      action: 'start',
-      error: 'multiplayer_force_required',
-      requiresForce: true,
-      manualCleanupRequired: true,
-    });
-    expect(bridge.getPendingRequest('place:test', 'edit')).toBeNull();
-  });
-
-  test('multiplayer_playtest forced start waits for detected server and client peers', async () => {
+  test('multiplayer_playtest start waits for detected server and client peers', async () => {
     const bridge = new BridgeService();
     const tools = new RobloxStudioTools(bridge) as any;
     tools._buildMultiplayerState = async () => ({
@@ -3271,7 +3335,7 @@ describe('Smoke', () => {
     });
     bridge.registerInstance(READY);
 
-    const resultPromise = tools.multiplayerPlaytest('start', 1, undefined, undefined, undefined, 2, 'place:test', true);
+    const resultPromise = tools.multiplayerPlaytest('start', 1, undefined, undefined, undefined, 2, 'place:test');
     const pending = bridge.getPendingRequest('place:test', 'edit');
     expect(pending?.request).toMatchObject({
       endpoint: '/api/multiplayer-test-start',
@@ -3302,12 +3366,12 @@ describe('Smoke', () => {
 
     const result = await resultPromise;
     const body = JSON.parse(result.content[0].text);
-    expect(body).toMatchObject({
+    expect(body).toEqual({
       success: true,
       action: 'start',
-      ready: true,
-      manualCleanupRequired: true,
-      roles: expect.arrayContaining(['edit', 'server', 'client-1']),
+      message: 'Multiplayer playtest started.',
+      roles: ['edit', 'server', 'client-1'],
+      playerCount: 1,
     });
   });
 
@@ -3321,7 +3385,7 @@ describe('Smoke', () => {
     });
     bridge.registerInstance(READY);
 
-    const resultPromise = tools.multiplayerPlaytest('start', 1, undefined, undefined, undefined, 0.1, 'place:test', true);
+    const resultPromise = tools.multiplayerPlaytest('start', 1, undefined, undefined, undefined, 0.1, 'place:test');
     const pending = bridge.getPendingRequest('place:test', 'edit');
     bridge.resolveRequest(pending!.requestId, {
       success: true,
@@ -3330,17 +3394,75 @@ describe('Smoke', () => {
 
     const result = await resultPromise;
     const body = JSON.parse(result.content[0].text);
-    expect(body).toMatchObject({
+    expect(body).toEqual({
       success: false,
       action: 'start',
       error: 'multiplayer_start_not_detected',
-      manualCleanupRequired: true,
+      message: 'Multiplayer Studio test start was requested, but MCP did not detect the required server/client peers before timeout.',
+      roles: ['edit'],
     });
   });
 
-  test('multiplayer stop/end is disabled and does not call EndTest', async () => {
+  test('multiplayer_playtest add_players returns a brief result', async () => {
     const bridge = new BridgeService();
-    const tools = new RobloxStudioTools(bridge);
+    const tools = new RobloxStudioTools(bridge) as any;
+    tools.multiplayerTestAddPlayers = jest.fn(async () => ({
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          success: true,
+          ready: true,
+          roles: ['edit', 'server', 'client-1', 'client-2'],
+          wait: { ok: true, timedOut: false },
+          state: {
+            clientRoles: ['client-1', 'client-2'],
+            playerCount: 2,
+            players: [{ name: 'Player1' }, { name: 'Player2' }],
+          },
+        }),
+      }],
+    }));
+
+    const result = await tools.multiplayerPlaytest('add_players', 1, undefined, undefined, undefined, 2, 'place:test');
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      success: true,
+      action: 'add_players',
+      message: 'Players added.',
+      roles: ['edit', 'server', 'client-1', 'client-2'],
+      playerCount: 2,
+    });
+  });
+
+  test('multiplayer_playtest leave_client returns a brief result', async () => {
+    const bridge = new BridgeService();
+    const tools = new RobloxStudioTools(bridge) as any;
+    tools.multiplayerTestLeaveClient = jest.fn(async () => ({
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          success: true,
+          left: true,
+          roles: ['edit', 'server', 'client-1'],
+          state: { playerCount: 1, players: [{ name: 'Player1' }] },
+        }),
+      }],
+    }));
+
+    const result = await tools.multiplayerPlaytest('leave_client', undefined, 'client-2', undefined, undefined, 2, 'place:test');
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      success: true,
+      action: 'leave_client',
+      message: 'Client left.',
+      roles: ['edit', 'server', 'client-1'],
+    });
+  });
+
+  test('multiplayer_playtest end calls the server and confirms teardown', async () => {
+    const bridge = new BridgeService();
+    const tools = new RobloxStudioTools(bridge) as any;
+    tools._waitForMultiplayerEditDone = jest.fn(async () => true);
+    tools._waitForRuntimeRoles = jest.fn(async () => ({ ok: true, timedOut: false, roles: ['edit'] }));
+    tools._buildMultiplayerState = jest.fn(async () => ({ phase: 'completed', peers: [{ role: 'edit' }] }));
     bridge.registerInstance(READY);
     bridge.registerInstance({
       pluginSessionId: 'server-1',
@@ -3352,23 +3474,28 @@ describe('Smoke', () => {
       isRunning: true,
     });
 
-    const wrapperResult = await tools.multiplayerPlaytest('end', undefined, undefined, undefined, 'done', 1, 'place:test');
-    const wrapperBody = JSON.parse(wrapperResult.content[0].text);
-    expect(wrapperBody).toMatchObject({
-      success: false,
-      action: 'end',
-      error: 'multiplayer_stop_disabled',
-      manualCleanupRequired: true,
+    const wrapperPromise = tools.multiplayerPlaytest('end', undefined, undefined, undefined, 'done', 1, 'place:test');
+    const pending = bridge.getPendingRequest('place:test', 'server');
+    expect(pending?.request).toMatchObject({
+      endpoint: '/api/multiplayer-test-end',
+      data: { value: 'done' },
+    });
+    bridge.resolveRequest(pending!.requestId, {
+      success: true,
+      message: 'Multiplayer Studio test end requested.',
+      value: 'done',
     });
 
-    const rawResult = await tools.multiplayerTestEnd('done', 1, 'place:test');
-    const rawBody = JSON.parse(rawResult.content[0].text);
-    expect(rawBody).toMatchObject({
-      success: false,
-      error: 'multiplayer_stop_disabled',
-      manualCleanupRequired: true,
+    const wrapperResult = await wrapperPromise;
+    const wrapperBody = JSON.parse(wrapperResult.content[0].text);
+    expect(wrapperBody).toEqual({
+      success: true,
+      action: 'end',
+      message: 'Multiplayer playtest ended.',
+      teardownConfirmed: true,
     });
-    expect(bridge.getPendingRequest('place:test', 'server')).toBeNull();
+    expect(tools._waitForMultiplayerEditDone).toHaveBeenCalledWith('place:test', 1);
+    expect(tools._waitForRuntimeRoles).toHaveBeenCalledWith('place:test', { noRuntime: true }, 1);
   });
 
   test('multiplayer start keeps waiting when edit phase completes before peers register', async () => {

@@ -5,12 +5,19 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { McpClient, runTest, assert, startPlaytestAndWait, safeStopPlaytest } from './lib/mcp-client.mjs';
 
+function routedRoles(connected) {
+  const instanceId = process.env.MCP_INSTANCE_ID;
+  return (connected.instances ?? [])
+    .filter((instance) => !instanceId || instance.id === instanceId || instance.instanceId === instanceId)
+    .flatMap((instance) => instance.roles ?? (instance.role ? [instance.role] : []));
+}
+
 async function waitForRoles(client, requiredRoles, { timeoutSec = 30, pollMs = 500 } = {}) {
   const deadline = Date.now() + timeoutSec * 1000;
   let last;
   while (Date.now() < deadline) {
     const connected = await client.callTool('get_connected_instances', {});
-    const roles = (connected.instances ?? []).map((inst) => inst.role);
+    const roles = routedRoles(connected);
     last = roles;
     if (requiredRoles.every((role) => roles.includes(role))) return roles;
     await delay(pollMs);
@@ -23,7 +30,7 @@ async function waitForNoRuntime(client, { timeoutSec = 30, pollMs = 500 } = {}) 
   let last;
   while (Date.now() < deadline) {
     const connected = await client.callTool('get_connected_instances', {});
-    const roles = (connected.instances ?? []).map((inst) => inst.role);
+    const roles = routedRoles(connected);
     last = roles;
     if (!roles.some((role) => role === 'server' || role.startsWith('client-'))) return roles;
     await delay(pollMs);
@@ -148,5 +155,41 @@ await runTest('runtime eval bridges stay out of edit mode', async ({ track }) =>
   }
   await assertEditBridgesAbsent(client, 'after direct playtest');
 
-  console.log('  SKIP direct multiplayer runtime bridge coverage: known Roblox StudioTestService multiplayer regression');
+  await startDirectMultiplayer(client);
+  try {
+    await assertRuntimeEvalWorks(client, 'client-1');
+    await assertRuntimeEvalWorks(client, 'client-2');
+
+    const marker = `__MCP_RUNTIME_BRIDGE_DIRECT_MP_ATTR_${Date.now()}`;
+    await client.callTool('execute_luau', {
+      target: 'server',
+      code: `print("${marker}", "server", #game:GetService("Players"):GetPlayers()) return true`,
+    });
+    await client.callTool('execute_luau', {
+      target: 'client-1',
+      code: `print("${marker}", game:GetService("Players").LocalPlayer.Name) return true`,
+    });
+    await client.callTool('execute_luau', {
+      target: 'client-2',
+      code: `print("${marker}", game:GetService("Players").LocalPlayer.Name) return true`,
+    });
+    await delay(500);
+
+    const logs = await client.callTool('get_runtime_logs', {
+      target: 'all',
+      filter: marker,
+      tail: 20,
+    });
+    assert(logs.originPeerReliable === true, 'direct multiplayer runtime shape gets reliable peer attribution');
+    const peers = new Set((logs.entries ?? []).map((entry) => entry.peer));
+    assert(peers.has('server'), 'direct multiplayer logs include server peer attribution');
+    assert(peers.has('client-1'), 'direct multiplayer logs include client-1 peer attribution');
+    assert(peers.has('client-2'), 'direct multiplayer logs include client-2 peer attribution');
+  } finally {
+    await endDirectTest(client).catch(async () => {
+      await safeStopPlaytest(client);
+      await waitForNoRuntime(client).catch(() => {});
+    });
+  }
+  await assertEditBridgesAbsent(client, 'after direct multiplayer test');
 }).then((ok) => process.exit(ok ? 0 : 1));
