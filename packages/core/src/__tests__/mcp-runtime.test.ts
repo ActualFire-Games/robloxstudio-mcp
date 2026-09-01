@@ -10,9 +10,48 @@ import {
   serverInstructions,
 } from '../mcp-runtime.js';
 import { getReadOnlyTools, TOOL_DEFINITIONS } from '../tools/definitions.js';
-import type { RobloxStudioTools } from '../tools/index.js';
+import { RobloxStudioTools } from '../tools/index.js';
 
 type JsonObject = Record<string, unknown>;
+
+// Answers the next plugin request queued for `role` while a tool call is in flight,
+// the way the Studio plugin's poll loop would. Returns the request it answered.
+async function answerPending(
+  bridge: BridgeService,
+  role: string,
+  respond: (request: { endpoint: string; data: any }) => unknown,
+): Promise<{ endpoint: string; data: any }> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const pending = bridge.getPendingRequest('place:test', role);
+    if (pending) {
+      bridge.resolveRequest(pending.requestId, respond(pending.request));
+      return pending.request;
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  throw new Error(`timed out waiting for a ${role} plugin request`);
+}
+
+// A connected in-memory client/server pair whose tools are the real RobloxStudioTools
+// dispatched through the real TOOL_HANDLERS, so results have their production shape.
+async function connectedTools(toolNames: string[], tools: RobloxStudioTools) {
+  const definitions = TOOL_DEFINITIONS.filter((tool) => toolNames.includes(tool.name));
+  const server = createToolServer({
+    config: { name: 'test-server', version: '3.0.0', tools: definitions },
+    getTools: () => tools,
+    era: 'modern',
+    invoke: (target, name, args) => TOOL_HANDLERS[name](target, args),
+  });
+  const client = new Client({ name: 'test-client', version: '1.0.0' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  const close = async () => {
+    await client.close();
+    await server.close();
+  };
+  return { client, close };
+}
 
 function isJsonObject(value: unknown): value is JsonObject {
   return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -85,6 +124,30 @@ describe('MCP v2 tool runtime', () => {
     ]);
   });
 
+  test('synthesizes structuredContent for schema-backed results without a JSON object', () => {
+    const prose = normalizeToolResult({
+      content: [
+        { type: 'text', text: 'Screenshot 10x10px.' },
+        { type: 'image', data: 'aW1hZ2U=', mimeType: 'image/jpeg' },
+      ],
+    }, 'modern', true);
+    expect(prose.structuredContent).toEqual({ message: 'Screenshot 10x10px.' });
+    expect(prose.content).toHaveLength(2);
+
+    const mediaOnly = normalizeToolResult({
+      content: [{ type: 'image', data: 'aW1hZ2U=', mimeType: 'image/png' }],
+    }, 'legacy', true);
+    expect(mediaOnly.structuredContent).toEqual({});
+    expect(mediaOnly.content).toEqual([{ type: 'image', data: 'aW1hZ2U=', mimeType: 'image/png' }]);
+
+    // Markdown tools have no output schema, and error results are exempt from validation.
+    expect(normalizeToolResult({ content: [{ type: 'text', text: '# Docs' }] }, 'modern').structuredContent)
+      .toBeUndefined();
+    const failed = normalizeToolResult({ content: [{ type: 'text', text: 'boom' }], isError: true }, 'modern', true);
+    expect(failed.structuredContent).toBeUndefined();
+    expect(failed.isError).toBe(true);
+  });
+
   test('keeps the catalog within the 3.0 token budget', () => {
     const catalog = TOOL_DEFINITIONS.map(publicToolDefinition);
     const names = new Set(catalog.map((tool) => tool.name));
@@ -105,6 +168,11 @@ describe('MCP v2 tool runtime', () => {
       type: 'object',
       additionalProperties: true,
     });
+    // Media tools advertise the object schema too, so their results must carry a
+    // structured object next to the image (covered by the transport tests below).
+    for (const mediaTool of ['capture_screenshot', 'get_asset_thumbnail', 'capture_device_matrix']) {
+      expect(byName.get(mediaTool)?.outputSchema).toEqual({ type: 'object', additionalProperties: true });
+    }
 
     // Only the deprecated playtest aliases stay out of the advertised catalog here;
     // the rest of upstream's 3.0 cull is deliberately still exposed by this fork.
@@ -262,6 +330,115 @@ describe('MCP v2 tool runtime', () => {
     } finally {
       await client.close();
       await server.close();
+    }
+  });
+
+  test('delivers screenshots as an image block plus structured metadata', async () => {
+    const bridge = new BridgeService();
+    bridge.registerInstance({ pluginSessionId: 'edit-session', instanceId: 'place:test', role: 'edit' });
+    const tools = new RobloxStudioTools(bridge);
+    const { client, close } = await connectedTools(['capture_screenshot'], tools);
+
+    try {
+      const call = client.callTool({ name: 'capture_screenshot', arguments: { format: 'png' } });
+      const request = await answerPending(bridge, 'edit', () => ({
+        width: 1,
+        height: 1,
+        data: Buffer.from([0, 0, 0, 255]).toString('base64'),
+      }));
+      expect(request.endpoint).toBe('/api/capture-screenshot');
+
+      const result = await call;
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).toMatchObject({
+        success: true,
+        target: 'edit',
+        width: 1,
+        height: 1,
+        format: 'png',
+        mimeType: 'image/png',
+      });
+      expect(result.content).toEqual([expect.objectContaining({ type: 'image', mimeType: 'image/png' })]);
+
+      // A capture failure comes back as an isError result carrying the message,
+      // instead of being hidden behind an output validation protocol error.
+      const failing = client.callTool({ name: 'capture_screenshot', arguments: {} });
+      await answerPending(bridge, 'edit', () => ({ error: 'viewport unavailable' }));
+      const failed = await failing;
+      expect(failed.isError).toBe(true);
+      expect(failed.structuredContent).toEqual({ error: 'screenshot_failed', message: 'viewport unavailable' });
+    } finally {
+      await close();
+    }
+  });
+
+  test('delivers asset thumbnails as an image block plus structured metadata', async () => {
+    const tools = new RobloxStudioTools(new BridgeService());
+    (tools as unknown as { openCloudClient: object }).openCloudClient = {
+      getAssetThumbnail: async (assetId: number) =>
+        assetId === 1 ? { base64: 'aW1hZ2U=', mimeType: 'image/png' } : null,
+    };
+    const { client, close } = await connectedTools(['get_asset_thumbnail'], tools);
+
+    try {
+      const found = await client.callTool({ name: 'get_asset_thumbnail', arguments: { assetId: 1, size: '150x150' } });
+      expect(found.isError).toBeFalsy();
+      expect(found.structuredContent).toEqual({ success: true, assetId: 1, size: '150x150', mimeType: 'image/png' });
+      expect(found.content).toEqual([{ type: 'image', data: 'aW1hZ2U=', mimeType: 'image/png' }]);
+
+      const missing = await client.callTool({ name: 'get_asset_thumbnail', arguments: { assetId: 2 } });
+      expect(missing.isError).toBe(true);
+      expect(missing.structuredContent).toEqual({
+        error: 'thumbnail_unavailable',
+        message: 'Thumbnail not available for asset 2.',
+      });
+    } finally {
+      await close();
+    }
+  });
+
+  test('delivers device matrix captures with the summary as structured content', async () => {
+    const bridge = new BridgeService();
+    bridge.registerInstance({ pluginSessionId: 'edit-session', instanceId: 'place:test', role: 'edit' });
+    const tools = new RobloxStudioTools(bridge);
+    const { client, close } = await connectedTools(['capture_device_matrix'], tools);
+
+    try {
+      const call = client.callTool({
+        name: 'capture_device_matrix',
+        arguments: { entries: [{ label: 'phone', deviceId: 'iphone_XR' }], settleSeconds: 0 },
+      });
+      const luau = (returnValue: unknown) => ({ success: true, returnValue: JSON.stringify(returnValue) });
+      await answerPending(bridge, 'edit', () => luau({ activeDeviceId: 'default', isSimulating: false }));
+      await answerPending(bridge, 'edit', () => luau({
+        success: true,
+        applied: { deviceId: 'iphone_XR' },
+        before: { activeDeviceId: 'default', isSimulating: false },
+        after: { activeDeviceId: 'iphone_XR', isSimulating: true },
+      }));
+      const capture = await answerPending(bridge, 'edit', () => ({
+        width: 1,
+        height: 1,
+        data: Buffer.from([0, 0, 0, 255]).toString('base64'),
+      }));
+      expect(capture.endpoint).toBe('/api/capture-screenshot');
+      await answerPending(bridge, 'edit', () => luau({
+        success: true,
+        applied: { stopSimulation: true },
+        before: { activeDeviceId: 'iphone_XR', isSimulating: true },
+        after: { activeDeviceId: 'default', isSimulating: false },
+      }));
+
+      const result = await call;
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).toMatchObject({
+        target: 'edit',
+        entries: [{ label: 'phone', screenshot: { width: 1, height: 1, format: 'jpeg' } }],
+      });
+      expect(result.content.some((block) => block.type === 'image')).toBe(true);
+      expect(result.content.some((block) => block.type === 'text')).toBe(true);
+    } finally {
+      await close();
     }
   });
 

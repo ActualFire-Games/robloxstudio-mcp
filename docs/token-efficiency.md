@@ -72,6 +72,12 @@ guide only when needed, and the guide is not part of the tool catalog.
 - Modern 2026-07-28 clients receive JSON once, in `structuredContent`.
 - Legacy 2025 clients receive one JSON text projection for compatibility.
 - Human-readable Markdown and image/audio content remain content blocks.
+- Tools that answer with media (`capture_screenshot`, `get_asset_thumbnail`,
+  `capture_device_matrix`) put their metadata in the structured object and keep
+  the image as a content block. A schema'd result with no JSON object at all
+  still gets a synthesized structured object (`{ message }` from its text, or
+  `{}`), because every tool but `get_roblox_docs` advertises an output schema
+  and the SDK rejects a schema'd result without structured content.
 - Known bundle, plugin-session, version-mismatch, debug, and diagnostic metadata
   fields are removed at the protocol boundary.
 - `get_connected_instances` returns each place once as `{ id, name, roles }`

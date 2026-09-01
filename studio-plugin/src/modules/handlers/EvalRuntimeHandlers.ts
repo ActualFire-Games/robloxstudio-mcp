@@ -80,7 +80,12 @@ function evalRuntime(requestData: Record<string, unknown>) {
 	const m = new Instance("ModuleScript");
 	m.Name = PAYLOAD_INSTANCE_NAME;
 	const userLines = LuauExec.countLines(code);
-	const wrapped = LuauExec.buildWrapper(code, PAYLOAD_INSTANCE_NAME);
+	// serializeReturn: the wrapper's result crosses a BindableFunction boundary
+	// to reach this plugin VM, and that boundary rejects cyclic tables ("tables
+	// cannot be cyclic") and silently drops the string keys of mixed tables. The
+	// game VM therefore formats the return value (JSON or tostring) before it
+	// crosses, so `return require(SomeModule)` cannot fail at the bridge.
+	const wrapped = LuauExec.buildWrapper(code, PAYLOAD_INSTANCE_NAME, { serializeReturn: true });
 
 	const [okSet, setErr] = pcall(() => {
 		(m as unknown as { Source: string }).Source = wrapped;

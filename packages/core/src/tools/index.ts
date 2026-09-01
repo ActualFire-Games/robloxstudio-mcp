@@ -53,6 +53,62 @@ type EncodedViewportCapture = {
   error: string;
 };
 
+type RuntimeLogEntry = {
+  seq: number;
+  ts: number;
+  level: string;
+  message: string;
+  data?: unknown;
+  capturedBy?: string;
+  peer?: string;
+};
+
+type RuntimeLogCursor =
+  | { kind: 'none' }
+  | { kind: 'shared'; seq: number }
+  | { kind: 'perBuffer'; seqs: Record<string, number> }
+  | { kind: 'playtest' };
+
+const SINCE_SHAPE_HINT = 'since must be a non-negative number, a nextSince map keyed by buffer, or "playtest".';
+
+// `since` for get_runtime_logs: one shared seq (only meaningful for a single
+// buffer, since every buffer counts independently), a per-buffer map in the
+// shape nextSince returns for target=all, or "playtest" for everything logged
+// since the current playtest began.
+function parseRuntimeLogSince(since: unknown): RuntimeLogCursor {
+  if (since === undefined || since === null) return { kind: 'none' };
+  if (typeof since === 'number') {
+    if (!Number.isFinite(since) || since < 0) throw new Error(SINCE_SHAPE_HINT);
+    return { kind: 'shared', seq: since };
+  }
+  if (since === 'playtest') return { kind: 'playtest' };
+  if (typeof since === 'object' && !Array.isArray(since)) {
+    const seqs: Record<string, number> = {};
+    for (const [role, seq] of Object.entries(since as Record<string, unknown>)) {
+      if (typeof seq !== 'number' || !Number.isFinite(seq) || seq < 0) {
+        throw new Error(`since["${role}"] must be that buffer's nextSince (a non-negative number).`);
+      }
+      seqs[role] = seq;
+    }
+    return { kind: 'perBuffer', seqs };
+  }
+  throw new Error(SINCE_SHAPE_HINT);
+}
+
+function runtimeLogSinceFor(cursor: RuntimeLogCursor, role: string): number | undefined {
+  if (cursor.kind === 'shared') return cursor.seq;
+  if (cursor.kind === 'perBuffer') return cursor.seqs[role];
+  return undefined;
+}
+
+// Roblox encodes an empty context dictionary as an empty JSON array; drop it so
+// entries without structured context carry no data field at all.
+function compactRuntimeLogEntry(entry: RuntimeLogEntry): RuntimeLogEntry {
+  const compact: RuntimeLogEntry = { ...entry };
+  if (Array.isArray(compact.data) && compact.data.length === 0) delete compact.data;
+  return compact;
+}
+
 type DeviceSimulatorSettings = {
   deviceId?: string;
   orientation?: string;
@@ -985,6 +1041,16 @@ export class RobloxStudioTools {
 
   private _textResult(body: Record<string, unknown>) {
     return { content: [{ type: 'text', text: JSON.stringify(body) }] };
+  }
+
+  // A tool-level failure the caller can act on: a short stable code plus the
+  // message. isError exempts the result from the SDK's output-schema check, so
+  // the message is delivered even for tools whose success shape is media.
+  private _errorResult(code: string, message: string) {
+    return {
+      content: [{ type: 'text', text: JSON.stringify({ error: code, message }) }],
+      isError: true,
+    };
   }
 
   async getRobloxSkills(action: string, name?: string) {
@@ -2680,19 +2746,25 @@ export class RobloxStudioTools {
     };
   }
 
-  async getRuntimeLogs(target?: string, since?: number, tail?: number, filter?: string, instance_id?: string) {
+  async getRuntimeLogs(target?: string, since?: unknown, tail?: number, filter?: string, instance_id?: string) {
     // Per-capture in-memory log buffer (see studio-plugin RuntimeLogBuffer.ts).
-    // target="all" (default) fans out to every connected instance except
-    // edit-proxy (which has no buffer, just polls for stop-playtest), merges
-    // by (ts, seq) and dedups same-message-and-level entries captured within
-    // 2 seconds in different buffers. Ordinary Studio playtests reflect logs
-    // across edit/server/client, so capturedBy is not a reliable origin peer;
-    // only StudioTestService multiplayer sessions get a peer attribution.
+    // Each plugin peer (edit, server, client-N) buffers what its own DataModel
+    // logged, with its own seq counter. target="all" (the default) fans out to
+    // every connected peer except edit-proxy (no buffer), merges by (ts, seq)
+    // and collapses same-message-and-level entries that different buffers
+    // captured within 2 seconds, for Studio builds that mirror a message into
+    // several DataModels. capturedBy names the buffer; script-origin peer is
+    // only asserted for StudioTestService multiplayer sessions.
     const tgt = target ?? 'all';
-    const data: Record<string, unknown> = {};
-    if (since !== undefined) data.since = since;
-    if (tail !== undefined) data.tail = tail;
-    if (filter !== undefined) data.filter = filter;
+    const cursor = parseRuntimeLogSince(since);
+    const requestData = (role: string): Record<string, unknown> => {
+      const data: Record<string, unknown> = {};
+      const seq = runtimeLogSinceFor(cursor, role);
+      if (seq !== undefined) data.since = seq;
+      if (tail !== undefined) data.tail = tail;
+      if (filter !== undefined) data.filter = filter;
+      return data;
+    };
 
     // Resolve once. Single mode → one request and pass-through. Fanout
     // mode → iterate the resolved (instanceId, role) tuples; results keyed
@@ -2701,14 +2773,40 @@ export class RobloxStudioTools {
     const resolved = this.bridge.resolveTarget({ instance_id, target: tgt });
     if (!resolved.ok) throw new RoutingFailure(resolved.error);
 
+    // since="playtest": only what the current playtest logged. Runtime buffers
+    // exist only for the current playtest, so they pass through whole; the
+    // long-lived edit buffer is trimmed to the moment the runtime peers
+    // registered, which drops the edit-mode output (compile checks, prints)
+    // that preceded the playtest.
+    const anchorInstanceId = resolved.mode === 'single'
+      ? resolved.targetInstanceId
+      : resolved.targets[0]?.targetInstanceId;
+    let playtestStartedAtMs: number | undefined;
+    if (cursor.kind === 'playtest') {
+      playtestStartedAtMs = anchorInstanceId ? this._playtestStartedAtMs(anchorInstanceId) : undefined;
+      if (playtestStartedAtMs === undefined) {
+        throw new Error(
+          'since="playtest" needs a running playtest on this place. Start one with solo_playtest or '
+          + 'multiplayer_playtest, or pass a numeric cursor or nextSince map instead.',
+        );
+      }
+    }
+    const keepsEntry = (role: string, entry: { ts?: number }): boolean => {
+      if (playtestStartedAtMs === undefined || role !== 'edit') return true;
+      return typeof entry.ts === 'number' && entry.ts * 1000 >= playtestStartedAtMs;
+    };
+    const playtestStartedAt = playtestStartedAtMs === undefined
+      ? undefined
+      : new Date(playtestStartedAtMs).toISOString();
+
     if (resolved.mode === 'single') {
       const originPeerReliable = await this._isMultiplayerTestRunning(resolved.targetInstanceId);
       const response = (await this.client.request(
         '/api/get-runtime-logs',
-        data,
+        requestData(resolved.targetRole),
         resolved.targetInstanceId,
         resolved.targetRole,
-      )) as { capturedBy?: string; peer?: string; entries?: Array<{ capturedBy?: string; peer?: string }> } & Record<string, unknown>;
+      )) as { capturedBy?: string; peer?: string; entries?: RuntimeLogEntry[] } & Record<string, unknown>;
       // The plugin-side handler can only report generic "client" because the
       // client DM doesn't know its server-assigned client-N role. Normalize to
       // the resolved capture buffer, but do not claim script-origin peer unless
@@ -2718,12 +2816,17 @@ export class RobloxStudioTools {
       response.originPeerReliable = originPeerReliable;
       response.peerAttribution = originPeerReliable ? 'guaranteed_multiplayer' : 'unavailable_shared_logservice';
       if (originPeerReliable) response.peer = resolved.targetRole;
+      if (playtestStartedAt !== undefined) response.playtestStartedAt = playtestStartedAt;
       if (Array.isArray(response.entries)) {
-        for (const e of response.entries) {
-          e.capturedBy = resolved.targetRole;
-          delete e.peer;
-          if (originPeerReliable) e.peer = resolved.targetRole;
-        }
+        response.entries = response.entries
+          .filter((e) => keepsEntry(resolved.targetRole, e))
+          .map((e) => {
+            const entry = compactRuntimeLogEntry(e);
+            delete entry.peer;
+            entry.capturedBy = resolved.targetRole;
+            if (originPeerReliable) entry.peer = resolved.targetRole;
+            return entry;
+          });
       }
       return {
         content: [{ type: 'text', text: JSON.stringify(response) }],
@@ -2734,19 +2837,10 @@ export class RobloxStudioTools {
 
     type PeerResponse = {
       capturedBy?: string;
-      entries?: Entry[];
+      entries?: RuntimeLogEntry[];
       totalDropped?: number;
       nextSince?: number;
       error?: string;
-    };
-    type Entry = {
-      seq: number;
-      ts: number;
-      level: string;
-      message: string;
-      data?: Record<string, unknown>;
-      capturedBy?: string;
-      peer?: string;
     };
     const originPeerReliable = targets.length > 0
       ? await this._isMultiplayerTestRunning(targets[0].targetInstanceId)
@@ -2756,7 +2850,7 @@ export class RobloxStudioTools {
       targets.map(async (t) => {
         const r = (await this.client.request(
           '/api/get-runtime-logs',
-          data,
+          requestData(t.targetRole),
           t.targetInstanceId,
           t.targetRole,
         )) as PeerResponse;
@@ -2764,7 +2858,7 @@ export class RobloxStudioTools {
       }),
     );
 
-    const merged: Entry[] = [];
+    const merged: RuntimeLogEntry[] = [];
     const perCaptureNextSince: Record<string, number> = {};
     const perCaptureErrors: Record<string, string> = {};
     let totalDropped = 0;
@@ -2780,7 +2874,8 @@ export class RobloxStudioTools {
       if (v.nextSince !== undefined) perCaptureNextSince[capturedBy] = v.nextSince;
       totalDropped += v.totalDropped ?? 0;
       for (const e of v.entries ?? []) {
-        const entry = { ...e };
+        if (!keepsEntry(capturedBy, e)) continue;
+        const entry = compactRuntimeLogEntry(e);
         delete entry.peer;
         merged.push({ ...entry, capturedBy });
       }
@@ -2788,21 +2883,30 @@ export class RobloxStudioTools {
 
     merged.sort((a, b) => (a.ts !== b.ts ? a.ts - b.ts : a.seq - b.seq));
 
-    // Cross-peer dedup. LogService reflects prints across peers in Studio
-    // Play, so the same message can land in multiple peers' buffers within
-    // ~250ms (client batch) + ~700ms (peer-listener startup skew). 2s window
-    // matches the LogBuffer primitive's heuristic.
+    // Cross-buffer dedup for Studio builds that mirror a message into several
+    // DataModels: the same line can then land in more than one buffer within
+    // ~250ms (client batch) + ~700ms (peer-listener startup skew). The 2s
+    // window matches the LogBuffer primitive's heuristic. Repeats inside one
+    // buffer are genuine repeated prints and are kept. merged is sorted by
+    // ts, so only the entries inside the window need comparing.
     const DEDUP_WINDOW = 2.0;
-    const deduped: Entry[] = [];
+    const deduped: RuntimeLogEntry[] = [];
+    let duplicatesRemoved = 0;
     for (const e of merged) {
-      const isDup = deduped.some(
-        (d) =>
-          d.message === e.message &&
-          d.level === e.level &&
-          Math.abs(d.ts - e.ts) <= DEDUP_WINDOW &&
-          d.capturedBy !== e.capturedBy,
-      );
-      if (!isDup) deduped.push(e);
+      let isDup = false;
+      for (let i = deduped.length - 1; i >= 0; i--) {
+        const d = deduped[i];
+        if (e.ts - d.ts > DEDUP_WINDOW) break;
+        if (d.capturedBy !== e.capturedBy && d.message === e.message && d.level === e.level) {
+          isDup = true;
+          break;
+        }
+      }
+      if (isDup) {
+        duplicatesRemoved += 1;
+      } else {
+        deduped.push(e);
+      }
     }
 
     // Re-apply tail post-merge since per-peer tail may have over-returned.
@@ -2817,10 +2921,14 @@ export class RobloxStudioTools {
     const body: Record<string, unknown> = {
       entries: finalEntries,
       totalDropped,
+      duplicatesRemoved,
+      // One cursor per buffer, in exactly the shape `since` accepts back.
+      nextSince: perCaptureNextSince,
       perCaptureNextSince,
       originPeerReliable,
       peerAttribution: originPeerReliable ? 'guaranteed_multiplayer' : 'unavailable_shared_logservice',
     };
+    if (playtestStartedAt !== undefined) body.playtestStartedAt = playtestStartedAt;
     if (originPeerReliable) {
       body.perPeerNextSince = perCaptureNextSince;
     }
@@ -2832,6 +2940,18 @@ export class RobloxStudioTools {
     return {
       content: [{ type: 'text', text: JSON.stringify(body) }],
     };
+  }
+
+  // Earliest registration among the place's runtime peers (server, client-N):
+  // the closest available marker for "when the current playtest started" that
+  // also covers playtests started from the Studio Play button rather than from
+  // solo_playtest / multiplayer_playtest. Undefined when no playtest is running.
+  private _playtestStartedAtMs(instanceId: string): number | undefined {
+    const instanceIds = new Set(this.bridge.getEquivalentInstanceIds(instanceId));
+    const runtimePeers = this.bridge.getInstances()
+      .filter((i) => instanceIds.has(i.instanceId) && (i.role === 'server' || /^client-\d+$/.test(i.role)));
+    if (runtimePeers.length === 0) return undefined;
+    return Math.min(...runtimePeers.map((i) => i.connectedAt));
   }
 
   async captureScriptProfiler(target?: string, request: Record<string, unknown> = {}, instance_id?: string) {
@@ -4368,22 +4488,30 @@ export class RobloxStudioTools {
     if (!assetId) {
       throw new Error('Asset ID is required for get_asset_thumbnail');
     }
-    const result = await this.openCloudClient.getAssetThumbnail(assetId, size as any);
+    const requestedSize = size ?? '420x420';
+    const result = await this.openCloudClient.getAssetThumbnail(assetId, requestedSize as any);
     if (!result) {
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({ error: 'Thumbnail not available for this asset' })
-        }]
-      };
+      return this._errorResult('thumbnail_unavailable', `Thumbnail not available for asset ${assetId}.`);
     }
 
+    // JSON metadata first (lifted into structuredContent), then the image block.
     return {
-      content: [{
-        type: 'image',
-        data: result.base64,
-        mimeType: result.mimeType,
-      }]
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            success: true,
+            assetId,
+            size: requestedSize,
+            mimeType: result.mimeType,
+          }),
+        },
+        {
+          type: 'image',
+          data: result.base64,
+          mimeType: result.mimeType,
+        },
+      ],
     };
   }
 
@@ -5375,16 +5503,30 @@ export class RobloxStudioTools {
 
   async captureScreenshot(instance_id?: string, format?: string, quality?: number) {
     const { instanceId, clientRole } = this._resolveRuntime(instance_id);
-    const capture = await this._captureViewportImage(instanceId, clientRole ?? 'edit', format, quality);
+    const target = clientRole ?? 'edit';
+    const capture = await this._captureViewportImage(instanceId, target, format, quality);
     if (!capture.success) {
-      return { content: [{ type: 'text', text: capture.error }] };
+      return this._errorResult('screenshot_failed', capture.error);
     }
 
+    // Metadata goes first as JSON so the MCP runtime lifts it into
+    // structuredContent (the tool advertises an object output schema); the
+    // image itself stays a content block. A bare text-plus-image result has
+    // no structured object and fails SDK output validation on both ends.
     return {
       content: [
         {
           type: 'text',
-          text: capture.message,
+          text: JSON.stringify({
+            success: true,
+            target,
+            width: capture.width,
+            height: capture.height,
+            format: capture.format,
+            quality: capture.quality,
+            mimeType: capture.mimeType,
+            message: capture.message,
+          }),
         },
         {
           type: 'image',

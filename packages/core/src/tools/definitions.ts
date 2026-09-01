@@ -1471,8 +1471,12 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           description: 'Buffer to read: edit, server, client-N, or all (default).'
         },
         since: {
-          type: 'number',
-          description: 'Return entries with seq above this; pass back nextSince.'
+          description: 'Cursor: a number, a nextSince map per buffer, or "playtest".',
+          anyOf: [
+            { type: 'number', minimum: 0 },
+            { type: 'string', enum: ['playtest'] },
+            { type: 'object', additionalProperties: { type: 'number', minimum: 0 } }
+          ]
         },
         tail: {
           type: 'number',

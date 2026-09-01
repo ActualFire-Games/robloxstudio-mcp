@@ -31,6 +31,13 @@ the conventions below.
   `get_memory_breakdown` (per-tag), `get_scene_analysis` (SceneAnalysisService;
   requires the Scene Analysis beta feature), `capture_screenshot` (works during playtests),
   `simulate_mouse_input` / `simulate_keyboard_input`, `breakpoints`, and network/device simulation tools.
+- **`get_runtime_logs` cursors are per buffer.** Every buffer (`edit`, `server`, `client-N`) has its
+  own `seq` counter and the edit buffer is never cleared, so a numeric `since` is only valid for the
+  single buffer whose `nextSince` produced it. For `target:"all"` pass the returned `nextSince` map
+  back as `since`, or pass `since:"playtest"` to read only what the current playtest has logged
+  (runtime buffers in full, edit buffer trimmed to the playtest start). Buffers are per DataModel, so
+  old edit-mode output (compile checks, `execute_luau` prints) only shows up when the edit buffer is
+  read without a cursor.
 - **`get_class_info`** resolves from the version-matched official Roblox API dump: complete
   properties/methods/events with types, security tags, and inheritance (falls back to live probing
   offline).
@@ -84,6 +91,19 @@ the conventions below.
   `StylizedWaterService:RegisterSplashTag` fed by `StarterPlayerScripts.Setup._WaterSplashTagSetup` for the
   pattern). Design injection APIs to be call-order independent (late registration wires up live) so loader
   ordering never matters.
+- **No cyclic module dependencies, ever.** A "Cyclic module dependency" warning in Script Analysis is a
+  sign of bad structure, not a warning to silence: when two modules need each other, a responsibility
+  lives in the wrong place, so re-evaluate the structure instead of working around it. Moving a `require`
+  inside a function (a "lazy require") is **not** a fix: it only hides the cycle from the runtime, the
+  analyzer still reports it, and the coupling is still there. Break a cycle with one of these, in order of
+  preference: move the function to the module that owns the data it touches; have the lower-level module
+  expose a registration/injection API that the higher-level module (or a small setup module) feeds at load;
+  fire a signal from the lower module that the higher module listens to; or extract the shared piece into a
+  small mediator/interface module that both sides depend on. Dependencies flow one way only (shared
+  data/types, then utilities, then domain systems, then orchestrators/UI); a lower layer never requires a
+  higher one. A child module never requires its parent/ancestor module: pass what the child needs into its
+  constructor. Before adding a `require`, check that the target does not already depend, directly or
+  transitively, on the requiring module.
 - **`const` and require-by-string are valid Luau.** Both were recently added to the language and run natively —
   including in Studio edit mode. Never treat `const x = ...` or `require("@game/ServerScriptService/...")` as a
   pre-build dialect needing a transform step, and never "fix" them back to `local` / instance requires.
@@ -135,6 +155,9 @@ profilers → stop. Two caveats remain:
   DataModel — notably runtime mesh/skinning (`CreateMeshPartAsync`, `EditableMesh`, skinned
   `MeshPart`/`Bone` deformation, `HasSkinnedMesh`) can render/deform fine in edit mode yet fail in play.
   Verify runtime-sensitive changes inside an actual playtest, not just edit-mode `execute_luau`.
+- **`eval_*_runtime` return values are serialized inside the game VM** (JSON when encodable, `tostring`
+  otherwise) before they cross the eval bridge, so `return require(SomeModule)` is safe even for
+  self-referencing module tables. Prefer returning the specific fields you need over whole module tables.
 - **Visual verification is the user's job.** Logs and eval results prove logic; whether something *looks*
   right needs the user's eyes — list exactly what they should check in a manual playtest.
 - **Scripts inside Roblox Packages need the package marked as modified.** Studio does not reliably flag a
@@ -169,3 +192,13 @@ When the session model is **Fable** and **Ultra code mode (ultracode) is on**:
   deferred handlers (ChildAdded/ChildRemoved/tag/attribute signals) inside that same frame's
   `deferredThreads` sections — deferral coalesces within a cycle but does **not** spread work across frames.
   Amortizing work across frames requires an explicit queue drained under a per-frame budget, not `task.defer`.
+
+## Code Comments
+- Default to no comment. Code shows *how*; comment only to carry *why* — a non-obvious constraint, deliberate deviation, gotcha, or workaround.
+- Never narrate the code ("loop over users", "parse the body"), restate names/types/signatures, or mark block ends.
+- Never narrate the change ("fixed X", "updated to Y", "as requested"). A comment must read correctly to someone seeing the file fresh who never saw the diff; change context belongs in the commit message.
+- Delete by default. A comment that just restates a decision the code already reflects — "1 vCPU is deliberate", "right-sized from prod" — is dead weight even when it points to a doc: the doc is where anyone questioning it looks anyway. Keep inline only what a reader needs *at that line* and can't get from the code — a non-obvious invariant/constraint ("timeout must stay < interval — ALB rule") or a cross-file sync obligation ("keep in sync with the router's TGs").
+- Comments must stand on their own with any link removed — encode the substance, never a pointer as a substitute for it. Banned: specs, section numbers, design docs — point-in-time artifacts that get superseded and rot ("spec §7" is the canonical case). Fine: a maintained doc/README at a stable path — and when the *why* is a system-level narrative ("why it's built this way"), extract it there as a *pure* extraction: not an inline block, and not a comment that merely points to the doc. What stays inline are the non-obvious local details, which reference the doc only when a reader genuinely needs it *at that line* — a pointer-only comment generally shouldn't exist at all. Tickets, Confluence, RFCs, permalinks stay fine as trailing breadcrumbs.
+- Occam's razor on every comment you *keep*, not just the ones you delete. "Carries a real *why*" and "is worded minimally" are independent judgments — a genuine *why* can still be 3x too long, and "it's a real why" is not license to keep the wording verbatim. Keep only the one non-obvious fact a reader needs *at that line*, in the fewest words; cut the mechanism the code already shows, where a value is consumed downstream, the consequence-of-the-consequence, and justification-of-the-justification. A 5-line block almost never survives intact — suspect it on sight; the razored answer is sometimes zero.
+- A one-line summary on a public function/endpoint is fine; inline restatement of a single clear line never is.
+- TODOs are fine and don't need issue IDs — but a TODO is a marker, not a substitute for doing the work in scope.

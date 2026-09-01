@@ -215,15 +215,19 @@ eval_server_runtime and eval_client_runtime run inside the running game's Script
 
 - Both eval tools require a running playtest. The runtime bridge is created automatically inside the play DataModel, including for playtests the user started manually with the Studio Play button, and client VMs are reached through an automatic server-side RemoteFunction broker, so no setup call is needed.
 - Use return in the code to get a value back; otherwise only printed output is visible, which you read with get_runtime_logs.
+- Return values are serialized inside the game VM before they cross the eval bridge: tables come back as JSON when HttpService can encode them and as tostring output otherwise. Returning a module table directly is therefore safe even when it holds cycles or mixed keys, which the raw bridge would reject or silently trim; still prefer returning the specific fields you need.
 - eval_client_runtime target defaults to "client-1"; pass "client-2", "client-3", and so on for the extra peers of a multi-client playtest. List live roles with get_connected_instances.
 
 Read output with get_runtime_logs.
 
 - Each plugin peer keeps an in-memory ring buffer of roughly 64 KB of recent LogService output, and the oldest entries are dropped once over budget, so poll during long runs rather than only at the end.
 - Runtime peers seed from LogService:GetLogHistory() at plugin load, so startup logs emitted before the plugin finished loading are still returned. Seeded entries have no context dictionary (Roblox does not expose it for history), while live LogService.MessageOut entries include their structured context as an optional data field.
-- target=all (the default) merges every buffer and dedups entries with the same message and level captured within 2 seconds across different buffers. Each entry carries capturedBy naming the buffer that observed it.
-- In ordinary Studio play and run sessions LogService reflects logs across edit, server, and client, so script-origin peer is not reliable and entries omit peer. Only in multiplayer_playtest sessions is peer attribution reliable and included.
-- Poll incrementally: pass the previous response's nextSince (single target) or the matching perCaptureNextSince entry (target=all) back as since. Filtering order is since, then filter (a plain literal substring, with no Lua pattern semantics), then tail.
+- Buffers are per DataModel: edit, server, and each client-N capture what their own DataModel logged, and every entry carries capturedBy naming that buffer. The edit buffer lives for the whole Studio session, so it still holds edit-mode output (compile checks, execute_luau prints, plugin messages) from before a playtest started, and starting a playtest never clears it.
+- Every buffer has its own seq counter, so a numeric since is only meaningful for the single buffer whose nextSince produced it. Never reuse one buffer's cursor for another: applied to a different buffer it either hides new entries or replays old edit-mode lines as if they were playtest output.
+- since accepts three shapes: a number (one cursor, for a single target), the nextSince map returned by a target=all response (one cursor per buffer, keyed by capturedBy), or "playtest", which returns only entries logged since the current playtest's runtime peers registered. With "playtest" the server and client buffers are returned in full, the edit buffer is trimmed to that boundary, the response carries playtestStartedAt, and the call errors when no playtest is running.
+- target=all (the default) merges every buffer in timestamp order. Should a Studio build mirror one message into several buffers, entries with the same message and level within 2 seconds in different buffers are collapsed and counted in duplicatesRemoved; repeats inside one buffer are always kept.
+- peer is included only in multiplayer_playtest sessions, where StudioTestService gives each peer its own plugin instance; ordinary play and run sessions omit it and report peerAttribution as unavailable_shared_logservice.
+- Poll incrementally: pass the previous response's nextSince back as since. It is a number for a single target and a per-buffer map for target=all (perCaptureNextSince is the same map). Filtering order is since, then filter (a plain literal substring, with no Lua pattern semantics), then tail.
 
 ## Simulation and input
 

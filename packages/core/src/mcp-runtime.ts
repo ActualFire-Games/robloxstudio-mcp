@@ -127,17 +127,46 @@ function parseJsonObject(text: string): Record<string, unknown> | undefined {
   }
 }
 
+function isTextBlock(block: ResultContent): block is { type: 'text'; text: string } {
+  return block.type === 'text' && typeof block.text === 'string';
+}
+
+/**
+ * Builds the structured projection for a result that carries no JSON object
+ * (media-only or plain-prose results). Every tool except TEXT_RESULT_TOOLS
+ * advertises an object output schema, and both ends of the SDK reject a
+ * non-error result that has a schema but no structuredContent, which used to
+ * hide screenshots (and their error messages) behind a protocol error. The
+ * prose is echoed as `message` so clients that read structuredContent first
+ * still see it; a media-only result gets an empty object.
+ */
+function synthesizeStructuredContent(content: ResultContent[]): Record<string, unknown> {
+  const message = content
+    .filter(isTextBlock)
+    .map((block) => block.text.trim())
+    .filter((text) => text.length > 0)
+    .join('\n');
+  return message ? { message } : {};
+}
+
 /**
  * Converts the historic JSON-in-text result shape into the lean 2026 MCP shape.
  * Modern clients receive JSON once in structuredContent; legacy clients keep the
  * text projection required by older SDKs. Human-readable text and media survive.
+ * When the tool advertises an output schema (`expectsStructuredContent`) and the
+ * result has no JSON object to lift, a structured projection is synthesized so
+ * the result passes SDK output validation instead of failing the whole call.
  */
-export function normalizeToolResult(raw: unknown, era: ProtocolEra): CallToolResult {
+export function normalizeToolResult(
+  raw: unknown,
+  era: ProtocolEra,
+  expectsStructuredContent = false,
+): CallToolResult {
   const result = (raw && typeof raw === 'object' ? raw : {}) as ToolResultLike;
   const originalContent = Array.isArray(result.content) ? result.content : [];
   let structured = asStructuredObject(result.structuredContent);
   const jsonTextIndex = originalContent.findIndex((block) =>
-    block.type === 'text' && typeof block.text === 'string' && !!parseJsonObject(block.text));
+    isTextBlock(block) && !!parseJsonObject(block.text));
 
   if (!structured) {
     if (jsonTextIndex >= 0) {
@@ -146,8 +175,13 @@ export function normalizeToolResult(raw: unknown, era: ProtocolEra): CallToolRes
   }
 
   if (!structured) {
+    // Error results are exempt from SDK output validation, so they keep their shape.
+    const synthesized = expectsStructuredContent && !result.isError
+      ? synthesizeStructuredContent(originalContent)
+      : undefined;
     return {
       content: originalContent as CallToolResult['content'],
+      ...(synthesized ? { structuredContent: synthesized } : {}),
       ...(result.isError ? { isError: true } : {}),
     };
   }
@@ -315,14 +349,15 @@ export function createToolServer(options: McpRuntimeOptions): McpServer {
         annotations: publicDefinition.annotations,
       },
       async (args) => {
+        const expectsStructuredContent = !!publicDefinition.outputSchema;
         try {
           const raw = await options.invoke(options.getTools(), definition.name, args as Record<string, unknown>);
-          return normalizeToolResult(raw, options.era);
+          return normalizeToolResult(raw, options.era, expectsStructuredContent);
         } catch (error) {
           return normalizeToolResult({
             content: [{ type: 'text', text: JSON.stringify(publicToolErrorBody(definition.name, error)) }],
             isError: true,
-          }, options.era);
+          }, options.era, expectsStructuredContent);
         }
       },
     );
