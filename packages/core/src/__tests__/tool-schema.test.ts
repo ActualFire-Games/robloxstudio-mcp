@@ -294,6 +294,7 @@ describe('Tool schema compatibility', () => {
       clone_object: 'cloneObject',
       smart_duplicate: 'smartDuplicate',
       mass_duplicate: 'massDuplicate',
+      analyze_scripts: 'analyzeScripts',
       set_attribute: 'setAttribute',
       delete_attribute: 'deleteAttribute',
       bulk_set_attributes: 'bulkSetAttributes',

@@ -202,6 +202,13 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
   get_instance_children: (tools, body) => tools.getInstanceChildren(body.instancePath, body.instance_id),
   search_by_property: (tools, body) => tools.searchByProperty(body.propertyName, body.propertyValue, body.instance_id),
   get_class_info: (tools, body) => tools.getClassInfo(body.className, body.instance_id),
+  analyze_scripts: (tools, body) => tools.analyzeScripts({
+    instancePath: body.instancePath,
+    includeLints: body.include_lints,
+    solver: body.solver,
+    strictDatamodelTypes: body.strict_datamodel_types,
+    limit: body.limit,
+  }, body.instance_id),
   set_property: (tools, body) => tools.setProperty(body.instancePath, body.propertyName, body.propertyValue, body.instance_id),
   mass_set_property: (tools, body) => tools.massSetProperty(body.paths, body.propertyName, body.propertyValue, body.instance_id),
   mass_get_property: (tools, body) => tools.massGetProperty(body.paths, body.propertyName, body.instance_id),

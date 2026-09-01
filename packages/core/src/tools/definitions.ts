@@ -580,6 +580,41 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     }
   },
   {
+    name: 'analyze_scripts',
+    category: 'read',
+    description: 'Use to list Luau type errors (and optionally lints) for one script or the whole place, like Studio\'s Script Analysis.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        instancePath: {
+          type: 'string',
+          description: 'Script to report on; omit to cover every script in the place.'
+        },
+        include_lints: {
+          type: 'boolean',
+          description: 'Also return lint warnings (unused locals etc.), default false'
+        },
+        solver: {
+          type: 'string',
+          enum: ['old', 'new'],
+          description: 'Luau type solver, default old (what Studio runs today)'
+        },
+        strict_datamodel_types: {
+          type: 'boolean',
+          description: 'Type game.X.Y from the instance tree, default false'
+        },
+        limit: {
+          type: 'number',
+          description: 'Max diagnostics returned, default 200, max 2000'
+        },
+        instance_id: {
+          type: 'string',
+          description: 'Target Studio place; omit when only one is connected.'
+        }
+      }
+    }
+  },
+  {
     name: 'set_script_source',
     category: 'write',
     description: 'Use to overwrite a whole script when the rewrite is larger than a few targeted line edits.',

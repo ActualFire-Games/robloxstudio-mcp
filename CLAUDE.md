@@ -12,7 +12,7 @@ the conventions below.
 
 ## MCP server capabilities (current truths)
 
-- **73 tools.** With one Studio window connected, routing is automatic. With several, pass
+- **74 tools.** With one Studio window connected, routing is automatic. With several, pass
   `instance_id` per call **or** pin once with `set_active_session` (discover via `list_studio_sessions`);
   an explicit `instance_id` always overrides the pin.
 - **Playtests ARE drivable**: `solo_playtest` (start/stop/status, mode play/run) and
@@ -52,9 +52,13 @@ the conventions below.
 
 ## Removed/renamed tools (older docs and habits may reference these — do not use)
 
-- `get_script_analysis` → **removed**. Compile-check a script via `execute_luau`:
+- `get_script_analysis` → `analyze_scripts`. It runs luau-lsp (the open-source checker behind Studio's
+  Script Analysis) over a snapshot of the place and returns type errors per script; pass `instancePath`
+  for one script, `include_lints: true` for lint warnings (off by default because Studio shows few of
+  them), and read `unresolvedRequires` before trusting errors near `@self` requires. For a quick
+  syntax-only check, `execute_luau` still works:
   `local fn, err = loadstring(sourceText) print(err or "compiles OK")` — catches syntax errors with line
-  numbers. It does **not** type-check and does not run the game.
+  numbers but does **not** type-check and does not run the game.
 - `start_playtest` / `stop_playtest` / `get_playtest_output` → `solo_playtest` + `get_runtime_logs`.
 - `get_output_log` → `get_runtime_logs`.
 - `analyze_scene` → `get_scene_analysis`.
@@ -147,7 +151,8 @@ the conventions below.
 
 ## Verifying game edits
 
-After editing a script, **compile-check it** via the `execute_luau` loadstring check above. For runtime
+After editing a script, **compile-check it** via the `execute_luau` loadstring check above and run
+`analyze_scripts` with its `instancePath` to catch type errors the way Studio's Script Analysis would. For runtime
 behavior, playtest directly: `solo_playtest` start → `eval_server_runtime` / `get_runtime_logs` /
 profilers → stop. Two caveats remain:
 

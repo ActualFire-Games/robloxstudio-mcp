@@ -56,6 +56,7 @@ Studio to load the matching plugin.
 | `ROBLOX_STUDIO_ALLOWED_ORIGINS` | None | Comma-separated browser origins allowed to call the HTTP API cross-origin. |
 | `ROBLOX_OPEN_CLOUD_API_KEY` | None | Roblox Open Cloud key used by features such as audio preview and place version access. Required permissions depend on the tool. |
 | `MCP_PLUGINS_DIR` | Platform Studio Plugins folder | Override the destination used by plugin installation. |
+| `ROBLOX_STUDIO_LUAU_LSP` | None | Path to a `luau-lsp` binary (1.67.0 or newer) for `analyze_scripts`. When unset, a recent `luau-lsp` on `PATH` is used, otherwise the pinned release is downloaded once into `~/.robloxstudio-mcp/luau-lsp` after its SHA-256 is verified. |
 
 Creator Store audio preview requires `asset:read` permission. See
 [Creator Store assets](creator-store-assets.md) for its download and validation

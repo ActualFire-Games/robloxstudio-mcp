@@ -111,6 +111,7 @@ const routeMap: Record<string, Handler> = {
     "/api/set-properties": PropertyHandlers.setProperties,
 
 	"/api/get-script-source": ScriptHandlers.getScriptSource,
+	"/api/script-snapshot": ScriptHandlers.scriptSnapshot,
 	"/api/set-script-source": ScriptHandlers.setScriptSource,
 	"/api/edit-script-lines": ScriptHandlers.editScriptLines,
 	"/api/insert-script-lines": ScriptHandlers.insertScriptLines,

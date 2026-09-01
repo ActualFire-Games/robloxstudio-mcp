@@ -194,7 +194,21 @@ For every other write there is no warning, so say so yourself: ask the user to c
 - grep_scripts pattern mode supports top-level alternation with a vertical bar ("foo|bar" matches a line containing either) and is always case-sensitive; passing caseSensitive=false together with usePattern=true is rejected.
 - On large places, survey first with filesOnly=true, then narrow with path ("game.ServerScriptService") and classFilter, and use maxResultsPerScript, like the -m flag of ripgrep, so one noisy script does not eat the whole budget.
 - Both grep_scripts and find_and_replace_in_scripts take Lua patterns, not PCRE. See the pattern escaping rule under Discovery and edit work.
-- After editing, compile-check the script with execute_luau (see Playtests and runtime Luau) and surface any packageWarning (see Packages and the modified badge).
+- After editing, compile-check the script with execute_luau (see Playtests and runtime Luau), run analyze_scripts on it for type errors (see Script analysis), and surface any packageWarning (see Packages and the modified badge).
+
+## Script analysis
+
+- analyze_scripts runs luau-lsp, the open-source Luau type checker and linter that Studio's Script Analysis is built on, over a snapshot of every script in the place. Studio exposes no API for reading its own Script Analysis window, so this is the closest available equivalent; expect small differences at the margins, described below.
+- Omit instancePath to check the whole place, or pass a canonical script path to report on that script alone (its require graph is still checked so cross-module types resolve). The first call on a machine downloads a pinned luau-lsp release and the matching Roblox type definitions into ~/.robloxstudio-mcp/luau-lsp; later calls take a few seconds on a mid-sized place.
+- Type errors are always reported. Lint warnings (LocalUnused, LocalShadow, DeprecatedApi, and the rest of Luau's lint set) come back only with include_lints=true, because Studio's window shows few of them. Every diagnostic carries line, col, endLine, endCol (1-based), severity (error for TypeError, warning for lints), kind (TypeError or the lint name), and message.
+- Studio currently type-checks with the old Luau solver, so solver defaults to old. Pass solver=new to see what the new solver reports; it is noisier on most existing code.
+- The place-wide mode comes from Workspace.LuauTypeCheckMode (Default means nonstrict) and each script's leading --!strict, --!nonstrict, or --!nocheck comment overrides it, exactly as in Studio. Each reported script echoes the mode it was checked in.
+- The builtin vector type and Vector3 are unified before analysis, matching Studio; engine.vectorPatch reports whether that patch applied to the definitions in use.
+- unresolvedRequires lists requires luau-lsp could not follow, typically @self string requires or require(script.Child) from a module that has children, and requires of a dynamically chosen instance. Code depending on those modules is typed as unknown, so treat errors near them as suspect rather than real.
+- strict_datamodel_types=false (the default) types game.Service.Child chains as Instance so unusual tree access does not produce false positives; set it to true to type those chains from the actual instance tree.
+- Results are capped by limit (default 200, max 2000) with truncated=true when more exist; totals always count everything. Scripts under CoreGui and PluginGuiService are never analyzed. Scripts deleted while the snapshot is being read are skipped and counted in place.skipped.
+- Set ROBLOX_STUDIO_LUAU_LSP to a luau-lsp binary (1.67.0 or newer) to use your own install instead of the pinned download; a recent enough luau-lsp on PATH is picked up automatically.
+- A syntax error surfaces as a SyntaxError diagnostic, but the execute_luau loadstring check stays the quickest way to confirm that a single fresh edit compiles.
 
 ## Playtests and runtime Luau
 

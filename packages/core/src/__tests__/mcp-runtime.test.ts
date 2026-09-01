@@ -157,7 +157,7 @@ describe('MCP v2 tool runtime', () => {
 
     // This fork keeps tools upstream 3.0 dropped, so its catalog ceiling is higher than
     // upstream's 43,000, but the per-description budgets below are upstream's exactly.
-    expect(catalog).toHaveLength(73);
+    expect(catalog).toHaveLength(74);
     expect(serialized.length).toBeLessThanOrEqual(72_000);
     expect(catalog.every((tool) => tool.description.length <= 120)).toBe(true);
     // get_roblox_docs returns Markdown, so it is the one tool without a JSON output schema.

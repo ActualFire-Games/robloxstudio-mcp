@@ -2,6 +2,22 @@ import { StudioHttpClient } from './studio-client.js';
 import { BridgeService, RoutingFailure, type PublicPluginInstance } from '../bridge-service.js';
 import { getClassInfoFromDump } from '../api-dump.js';
 import {
+  LUAU_LSP_ENV,
+  MIN_LUAU_LSP_VERSION,
+  getLuauLspCacheDir,
+  resolveLuauDefinitions,
+  resolveLuauLspBinary,
+  type ResolvedDefinitions,
+  type ResolvedLuauLsp,
+} from '../luau-lsp-provisioner.js';
+import {
+  ScriptAnalysisError,
+  analyzeScripts,
+  withWorkspaceLock,
+  workspaceDirectoryFor,
+  type ScriptAnalysisRequest,
+} from '../script-analysis.js';
+import {
   OpenCloudClient,
   type AssetSearchParams,
   type CreatorStoreSearchCategory,
@@ -21,6 +37,10 @@ import { rgbaToJpeg } from '../jpeg-encoder.js';
 import { rgbaToPng } from '../png-encoder.js';
 import * as fs from 'fs';
 import * as path from 'path';
+
+// One analyze_scripts snapshot batch carries up to ~400 KB of script source;
+// the plugin reads it synchronously, so this covers a busy Studio and a large batch.
+const SCRIPT_SNAPSHOT_TIMEOUT_MS = 60_000;
 
 type RawImageCaptureResponse = {
   success?: boolean;
@@ -1930,6 +1950,53 @@ export class RobloxStudioTools {
       ...(typeof response.note === 'string' && response.note.length > 0 ? { note: response.note } : {}),
       source: response.numberedSource || response.source,
     });
+  }
+
+  async analyzeScripts(request: ScriptAnalysisRequest, instance_id?: string) {
+    // The workspace is keyed by the routed instance; routing errors themselves
+    // surface from the first plugin call below.
+    const routing = this.bridge.resolveTarget({ instance_id, target: undefined });
+    const instanceKey = routing.ok && routing.mode === 'single' ? routing.targetInstanceId : 'unrouted';
+    const workspaceRoot = workspaceDirectoryFor(getLuauLspCacheDir(), instanceKey);
+
+    let binary: ResolvedLuauLsp;
+    let definitions: ResolvedDefinitions;
+    try {
+      [binary, definitions] = await Promise.all([resolveLuauLspBinary(), resolveLuauDefinitions()]);
+    } catch (error) {
+      return this._errorResult(
+        'luau_lsp_unavailable',
+        `${(error as Error).message}. Install luau-lsp ${MIN_LUAU_LSP_VERSION} or newer and point ${LUAU_LSP_ENV} at it if the download keeps failing.`,
+      );
+    }
+
+    try {
+      const result = await withWorkspaceLock(workspaceRoot, () => analyzeScripts(request, {
+        fetchIndex: () => this._callSingle(
+          '/api/script-snapshot',
+          { part: 'index' },
+          undefined,
+          instance_id,
+          SCRIPT_SNAPSHOT_TIMEOUT_MS,
+        ),
+        fetchSources: (token, from, to) => this._callSingle(
+          '/api/script-snapshot',
+          { part: 'sources', token, from, to },
+          undefined,
+          instance_id,
+          SCRIPT_SNAPSHOT_TIMEOUT_MS,
+        ),
+        binary,
+        definitions,
+        workspaceRoot,
+      }));
+      return this._textResult({ ...result });
+    } catch (error) {
+      if (error instanceof ScriptAnalysisError) {
+        return this._errorResult(error.code, error.message);
+      }
+      throw error;
+    }
   }
 
   async setScriptSource(instancePath: string, source: string, instance_id?: string) {

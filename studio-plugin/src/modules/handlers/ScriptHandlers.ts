@@ -4,6 +4,17 @@ import Recording from "../Recording";
 const { getInstancePath, getInstanceByPath, readScriptSource, applyScriptSource, splitLines, joinLines } = Utils;
 const { beginRecording, finishRecording } = Recording;
 
+// Scripts under these services belong to Studio or to other plugins, not to the place.
+const SNAPSHOT_EXCLUDED_ROOT_CLASSES = new Set<string>([
+	"CoreGui",
+	"CorePackages",
+	"PluginGuiService",
+	"RobloxPluginGuiService",
+]);
+// A snapshot index pins an ordered instance list; source batches reference it by token
+// so the server reads exactly the scripts it indexed even if names change in between.
+const SNAPSHOT_TOKEN_TTL_SECONDS = 300;
+
 const SOURCE_TRUNCATE_CHAR_BUDGET = 25000;
 const SOURCE_TRUNCATE_LINE_BUDGET = 400;
 const SOURCE_TRUNCATE_TO_LINES = 300;
@@ -555,6 +566,141 @@ function findAndReplaceInScripts(requestData: Record<string, unknown>) {
 	return response;
 }
 
+interface SnapshotNode {
+	name: string;
+	className: string;
+	scriptIndex?: number;
+	children?: SnapshotNode[];
+}
+
+interface SnapshotCacheEntry {
+	token: string;
+	createdAt: number;
+	scripts: LuaSourceContainer[];
+}
+
+let snapshotCache: SnapshotCacheEntry | undefined;
+
+function rootAncestorOf(instance: Instance): Instance {
+	let top = instance;
+	while (top.Parent && top.Parent !== game) {
+		top = top.Parent;
+	}
+	return top;
+}
+
+function collectSnapshotScripts(): LuaSourceContainer[] {
+	const scripts: LuaSourceContainer[] = [];
+	for (const instance of game.GetDescendants()) {
+		if (!instance.IsA("LuaSourceContainer")) continue;
+		if (SNAPSHOT_EXCLUDED_ROOT_CLASSES.has(rootAncestorOf(instance).ClassName)) continue;
+		scripts.push(instance);
+	}
+	return scripts;
+}
+
+// Workspace.LuauTypeCheckMode is PluginSecurity and absent from the typings.
+function readTypeCheckMode(): string | undefined {
+	const [ok, value] = pcall(() => (game.GetService("Workspace") as unknown as { LuauTypeCheckMode?: unknown }).LuauTypeCheckMode);
+	if (!ok || !typeIs(value, "EnumItem")) return undefined;
+	return value.Name;
+}
+
+function buildSnapshotIndex() {
+	const scripts = collectSnapshotScripts();
+	const included = new Map<Instance, true>();
+	const indexOf = new Map<Instance, number>();
+	scripts.forEach((scriptInstance, i) => {
+		indexOf.set(scriptInstance, i + 1);
+		let current: Instance | undefined = scriptInstance;
+		while (current && current !== game) {
+			included.set(current, true);
+			current = current.Parent;
+		}
+	});
+
+	function buildNode(instance: Instance): SnapshotNode {
+		const node: SnapshotNode = { name: instance.Name, className: instance.ClassName };
+		const scriptIndex = indexOf.get(instance);
+		if (scriptIndex !== undefined) node.scriptIndex = scriptIndex;
+		const children: SnapshotNode[] = [];
+		for (const child of instance.GetChildren()) {
+			if (included.has(child)) children.push(buildNode(child));
+		}
+		if (children.size() > 0) node.children = children;
+		return node;
+	}
+
+	const roots: SnapshotNode[] = [];
+	for (const child of game.GetChildren()) {
+		if (included.has(child)) roots.push(buildNode(child));
+	}
+
+	const entries = scripts.map((scriptInstance, i) => {
+		const [ok, source] = pcall(() => readScriptSource(scriptInstance));
+		return {
+			index: i + 1,
+			path: getInstancePath(scriptInstance),
+			className: scriptInstance.ClassName,
+			sourceLength: ok ? source.size() : 0,
+		};
+	});
+
+	const token = game.GetService("HttpService").GenerateGUID(false);
+	snapshotCache = { token, createdAt: os.clock(), scripts };
+	return {
+		token,
+		count: scripts.size(),
+		typeCheckMode: readTypeCheckMode(),
+		placeId: game.PlaceId,
+		scripts: entries,
+		tree: { name: "game", className: "DataModel", children: roots },
+	};
+}
+
+function readSnapshotSources(requestData: Record<string, unknown>) {
+	const token = requestData.token;
+	const from = requestData.from;
+	const to = requestData.to;
+	if (!snapshotCache || snapshotCache.token !== token) {
+		return { error: "Snapshot token is unknown; request part \"index\" again", code: "snapshot_expired" };
+	}
+	if (os.clock() - snapshotCache.createdAt > SNAPSHOT_TOKEN_TTL_SECONDS) {
+		snapshotCache = undefined;
+		return { error: "Snapshot expired; request part \"index\" again", code: "snapshot_expired" };
+	}
+	const total = snapshotCache.scripts.size();
+	if (!typeIs(from, "number") || !typeIs(to, "number") || from < 1 || to < from || to > total) {
+		return { error: `from/to must satisfy 1 <= from <= to <= ${total}` };
+	}
+
+	const sources: Array<Record<string, unknown>> = [];
+	for (let i = from; i <= to; i++) {
+		const scriptInstance = snapshotCache.scripts[i - 1];
+		if (scriptInstance.Parent === undefined) {
+			sources.push({ index: i, missing: true });
+			continue;
+		}
+		const [ok, source] = pcall(() => readScriptSource(scriptInstance));
+		if (!ok) {
+			sources.push({ index: i, missing: true });
+			continue;
+		}
+		sources.push({ index: i, path: getInstancePath(scriptInstance), className: scriptInstance.ClassName, source });
+	}
+	return { token, from, to, sources };
+}
+
+// Two-part read used by analyze_scripts: "index" returns the script tree plus per-script
+// metadata and pins the instance list under a token; "sources" streams the sources for an
+// index range of that pinned list.
+function scriptSnapshot(requestData: Record<string, unknown>) {
+	const part = requestData.part;
+	if (part === "index") return buildSnapshotIndex();
+	if (part === "sources") return readSnapshotSources(requestData);
+	return { error: `Unknown snapshot part: ${tostring(part)}; expected "index" or "sources"` };
+}
+
 export = {
 	getScriptSource,
 	setScriptSource,
@@ -562,4 +708,5 @@ export = {
 	insertScriptLines,
 	deleteScriptLines,
 	findAndReplaceInScripts,
+	scriptSnapshot,
 };

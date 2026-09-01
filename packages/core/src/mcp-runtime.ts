@@ -296,6 +296,9 @@ export function serverInstructions(definitions: readonly ToolDefinition[]): stri
       'Use set_script_source only for whole-script replacement. Use edit_script_lines, insert_script_lines, or delete_script_lines for focused changes.',
     );
   }
+  if (has('analyze_scripts')) {
+    instructions.push('Run analyze_scripts on a script after editing it to catch Luau type errors.');
+  }
   if (has('solo_playtest', 'multiplayer_playtest', 'get_runtime_logs')) {
     instructions.push(
       'Start solo_playtest or multiplayer_playtest before targeting a live server or client. Read runtime output with get_runtime_logs.',

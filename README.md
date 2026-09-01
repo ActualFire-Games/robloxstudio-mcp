@@ -97,7 +97,7 @@ On Windows, wrap with `cmd /c` if `npx` doesn't resolve:
 
 [![NPM Version](https://img.shields.io/npm/v/@chrrxs/robloxstudio-mcp-inspector)](https://www.npmjs.com/package/@chrrxs/robloxstudio-mcp-inspector)
 
-36 Studio-safe inspection tools: no DataModel or script edits. The selection
+37 Studio-safe inspection tools: no DataModel or script edits. The selection
 tool can change editor selection and camera framing; export and profiler tools
 can write files only to explicit local paths. Install only one variant at a time
 (the installers remove the other automatically):
