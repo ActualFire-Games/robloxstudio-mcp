@@ -39,13 +39,15 @@ type ToolResultLike = {
   isError?: boolean;
 };
 
+// Stripped at every depth of a result, so a tool's own payload must never use
+// one of these names: analyze_scripts reports per-script "diagnostics", which
+// is why that upstream entry is absent here.
 const INTERNAL_RESULT_KEYS = new Set([
   'bundleModifiedAt',
   'bundlePath',
   'bundleSha256',
   'connectedAt',
   'debug',
-  'diagnostics',
   'internal',
   'lastActivity',
   'pluginSessionId',

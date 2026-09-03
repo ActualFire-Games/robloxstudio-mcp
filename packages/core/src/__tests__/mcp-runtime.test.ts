@@ -100,7 +100,7 @@ describe('MCP v2 tool runtime', () => {
             success: true,
             value: 42,
             pluginSessionId: 'internal-session',
-            diagnostics: { elapsed: 10 },
+            debug: { elapsed: 10 },
           }),
         },
         { type: 'image', data: 'aW1hZ2U=', mimeType: 'image/png' },
@@ -111,6 +111,29 @@ describe('MCP v2 tool runtime', () => {
     expect(result.content).toEqual([
       { type: 'image', data: 'aW1hZ2U=', mimeType: 'image/png' },
     ]);
+  });
+
+  test('keeps analyze_scripts per-script diagnostics in both projections', () => {
+    // "diagnostics" is a public payload key here, not internal plugin metadata;
+    // the internal-key filter runs at every depth, so it must not claim the name.
+    const script = {
+      path: 'game.ServerScriptService.Main',
+      className: 'Script',
+      mode: 'strict',
+      diagnostics: [
+        { line: 3, col: 1, endLine: 3, endCol: 5, severity: 'error', kind: 'TypeError', message: "Key 'count' not found" },
+      ],
+    };
+    const raw = {
+      content: [{ type: 'text', text: JSON.stringify({ scripts: [script], totals: { typeErrors: 1 }, pluginVersion: '3.0.1' }) }],
+    };
+
+    const modern = normalizeToolResult(raw, 'modern');
+    expect(modern.structuredContent).toEqual({ scripts: [script], totals: { typeErrors: 1 } });
+
+    const legacy = normalizeToolResult(raw, 'legacy');
+    const text = legacy.content.find((block) => block.type === 'text') as { text: string };
+    expect(JSON.parse(text.text)).toEqual({ scripts: [script], totals: { typeErrors: 1 } });
   });
 
   test('preserves public empty collections and null values', () => {
