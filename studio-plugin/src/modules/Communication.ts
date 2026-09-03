@@ -5,6 +5,7 @@ import UI from "./UI";
 import { cleanupLegacyEditBridges } from "./EvalBridges";
 import QueryHandlers from "./handlers/QueryHandlers";
 import PropertyHandlers from "./handlers/PropertyHandlers";
+import InstanceHandlers from "./handlers/InstanceHandlers";
 import ScriptHandlers from "./handlers/ScriptHandlers";
 import MetadataHandlers from "./handlers/MetadataHandlers";
 import TestHandlers from "./handlers/TestHandlers";
@@ -108,7 +109,22 @@ const routeMap: Record<string, Handler> = {
     "/api/project-structure": QueryHandlers.getProjectStructure,
     "/api/grep-scripts": QueryHandlers.grepScripts,
 
+    "/api/services": QueryHandlers.getServices,
+    "/api/instance-children": QueryHandlers.getInstanceChildren,
+    "/api/get-descendants": QueryHandlers.getDescendants,
+    "/api/compare-instances": QueryHandlers.compareInstances,
+
+    "/api/set-property": PropertyHandlers.setProperty,
     "/api/set-properties": PropertyHandlers.setProperties,
+    "/api/mass-set-property": PropertyHandlers.massSetProperty,
+    "/api/mass-get-property": PropertyHandlers.massGetProperty,
+
+    "/api/create-object": InstanceHandlers.createObject,
+    "/api/mass-create-objects": InstanceHandlers.massCreateObjects,
+    "/api/delete-object": InstanceHandlers.deleteObject,
+    "/api/smart-duplicate": InstanceHandlers.smartDuplicate,
+    "/api/mass-duplicate": InstanceHandlers.massDuplicate,
+    "/api/clone-object": InstanceHandlers.cloneObject,
 
 	"/api/get-script-source": ScriptHandlers.getScriptSource,
 	"/api/script-snapshot": ScriptHandlers.scriptSnapshot,
@@ -118,6 +134,13 @@ const routeMap: Record<string, Handler> = {
 	"/api/delete-script-lines": ScriptHandlers.deleteScriptLines,
 
 	"/api/get-attributes": MetadataHandlers.getAttributes,
+	"/api/set-attribute": MetadataHandlers.setAttribute,
+	"/api/delete-attribute": MetadataHandlers.deleteAttribute,
+	"/api/bulk-set-attributes": MetadataHandlers.bulkSetAttributes,
+	"/api/get-tags": MetadataHandlers.getTags,
+	"/api/add-tag": MetadataHandlers.addTag,
+	"/api/remove-tag": MetadataHandlers.removeTag,
+	"/api/get-tagged": MetadataHandlers.getTagged,
 	"/api/get-selection": MetadataHandlers.getSelection,
 	"/api/set-selection": MetadataHandlers.setSelection,
 	"/api/focus-viewport": MetadataHandlers.focusViewport,
