@@ -76,10 +76,23 @@ the conventions below.
 
 ## Luau conventions for the live game code
 
-- **Block comments on functions.** Put a `--[[ ]]` block comment above every function describing what it does
-  and any non-obvious assumptions.
+- **Block comments on functions.** Put a `--[[ ]]` block comment above a function only when it explains why,
+  or documents a publicly exposed function (library APIs, object methods). Other functions follow the Code
+  Comments section below. Always write them expanded, like guard clauses: `--[[` alone on the first
+  line, the text on the lines between (indented one level), and `]]` alone on the last line. Never collapse a
+  block comment onto one line or start the text on the `--[[` line (the script header's `--[[@description:`
+  line is the one exception; its text starts on the next line):
+
+  ```lua
+  --[[
+      Rebuilds the fence cube for the current selection and re-aims the camera at it.
+  ]]
+  local function rebuildField()
+  ```
 - **No em dashes in comments.** Use commas, colons, parentheses, or separate sentences instead; a `--`
   standing in for a dash is just as unwelcome inside Lua comments.
+- **American English.** Use American spelling in comments, identifiers, and strings: `color` not `colour`,
+  `center` not `centre`, `canceled` not `cancelled`, `neighboring` not `neighbouring`.
 - **Plain-language comments.** Write comments for a learning scripter: prefer everyday wording over fancy
   vocabulary ("deliberately mismatched speeds", not "mutually non-harmonic rates"). Technical terms are
   still welcome where plain words would lose the meaning (orthonormal, basis vector, unit vector).
@@ -115,10 +128,20 @@ the conventions below.
   `./X` is a **sibling**, `../X` is in parent.parent. To require a **child** of the requiring script, use
   `@self/X`. Three aliases exist at this time: `@self` (the requiring script itself), `@game` (DataModel
   root, e.g. `@game/ServerScriptService/...`), and `@rbx`.
-- **`const` for immutable bindings.** This codebase uses `const` for everything that is never reassigned —
-  services, `require`s, **and constants**. Use plain `local` only for genuinely mutable variables.
+- **`const` for services, dependencies, and constants.** This codebase uses `const` for services, `require`s,
+  and `LOUD_SNAKE_CASE` constants. Everything else uses plain `local`, except where `const` makes a particular
+  piece of code clearer.
 - **No magic values.** Lift literals into named `LOUD_SNAKE_CASE` (`UPPER_SNAKE_CASE`) `const` constants where
   it aids clarity, instead of inlining them.
+- **PascalCase dictionary keys.** Keys of dictionary-style tables are PascalCase, never camelCase:
+  `{ Center = center, Radius = radius }`, `state.FenceCount`, `entry.IsActive`, and the matching type
+  definitions (`{ Center: Vector3, Radius: number }`). Functions on a module table follow their call syntax
+  instead: dot-called functions are camelCase (`StringUtils.trim()`), colon-called methods are PascalCase
+  (`StylizedWaterService:RegisterSplashTag()`). A module that owns a system exposes methods, like a Roblox
+  service; a library of helpers exposes dot functions, like `task` and `table`. Methods are declared with a
+  colon; declare one with a dot only when `self` needs an explicit type annotation, and it is still a
+  method, so it keeps PascalCase. Local variables, parameters, and local functions stay camelCase;
+  constants stay `LOUD_SNAKE_CASE`.
 - **Expanded guard clauses.** Write guards multi-line with an early `return`/`continue`. Never collapse them to
   one line (no `if x then return end`).
 - **Guard clauses over nesting.** Prefer early returns to flatten control flow; avoid deeply nested conditionals.
@@ -206,4 +229,5 @@ When the session model is **Fable** and **Ultra code mode (ultracode) is on**:
 - Comments must stand on their own with any link removed — encode the substance, never a pointer as a substitute for it. Banned: specs, section numbers, design docs — point-in-time artifacts that get superseded and rot ("spec §7" is the canonical case). Fine: a maintained doc/README at a stable path — and when the *why* is a system-level narrative ("why it's built this way"), extract it there as a *pure* extraction: not an inline block, and not a comment that merely points to the doc. What stays inline are the non-obvious local details, which reference the doc only when a reader genuinely needs it *at that line* — a pointer-only comment generally shouldn't exist at all. Tickets, Confluence, RFCs, permalinks stay fine as trailing breadcrumbs.
 - Occam's razor on every comment you *keep*, not just the ones you delete. "Carries a real *why*" and "is worded minimally" are independent judgments — a genuine *why* can still be 3x too long, and "it's a real why" is not license to keep the wording verbatim. Keep only the one non-obvious fact a reader needs *at that line*, in the fewest words; cut the mechanism the code already shows, where a value is consumed downstream, the consequence-of-the-consequence, and justification-of-the-justification. A 5-line block almost never survives intact — suspect it on sight; the razored answer is sometimes zero.
 - A one-line summary on a public function/endpoint is fine; inline restatement of a single clear line never is.
+- Top-level section banners in Luau scripts are fine for exactly these groups: services, dependencies, types (type definitions and modules imported purely for their types), variables (constants included; there is no constants banner), private functions, public functions, and a main section, written as three lines: a dash line, `-- TITLE --` in capitals, a dash line; dash lines are at least 30 characters and grow to match a longer title line. Nested banners, or banners inside functions and other scopes, are noise.
 - TODOs are fine and don't need issue IDs — but a TODO is a marker, not a substitute for doing the work in scope.
